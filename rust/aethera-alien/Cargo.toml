@@ -1,0 +1,18 @@
+[package]
+name = "aethera-alien"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "aethera_alien"
+path = "src/lib.rs"
+
+[dependencies]
+aethera-core = { path = "../aethera-core" }
+aethera-geometer = { path = "../aethera-geometer" }
+rug = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { profile: minimal, toolchain: stable }
+      - name: Build Rust workspace
+        working-directory: rust
+        run: cargo build --workspace --exclude aethera-ffi --release
+      - name: Test Rust workspace
+        working-directory: rust
+        run: cargo test --release --workspace --exclude aethera-ffi
+
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Install Python deps
+        run: pip install numpy scipy networkx mpmath pytest
+      - name: Run Python tests
+        run: |
+          cd python && python -c "import sys; sys.path.insert(0,'.'); import aethera; print('import OK')"
+          cd .. && PYTHONPATH=python python -m pytest tests/test_integration.py -v
+
+  web-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: Install web deps
+        working-directory: web
+        run: npm install --no-audit --no-fund
+      - name: Build Next.js
+        working-directory: web
+        run: npm run build

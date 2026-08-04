@@ -3,6 +3,7 @@ import Link from 'next/link';
 
 export default function DashboardIndex() {
   const dashboards = [
+    { href: '/dashboard/distortion-observatory', name: 'Distortion Observatory', desc: 'Global Distortion Index + projection comparison' },
     { href: '/dashboard/ghost-resolver', name: 'Ghost Resolver', desc: 'Topological residual closure for censored areas' },
     { href: '/dashboard/consensus-hall', name: 'Consensus Hall of Shame', desc: 'Projection strain tensor + Colonial Distortion Score' },
     { href: '/dashboard/terraformer', name: 'Terraformation Simulator', desc: 'Sea-level rise and coastline displacement' },

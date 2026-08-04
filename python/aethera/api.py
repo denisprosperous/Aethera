@@ -390,6 +390,104 @@ async def projection_scores():
     }
 
 
+# ---- Distortion Analysis endpoints (v10.5) -------------------------
+
+@app.get("/api/distortion/global")
+async def distortion_global():
+    """Get the Global Distortion Index for all projections."""
+    with Database() as db:
+        db.cur.execute(
+            "SELECT projection, global_distortion_percent, total_physical_area_m2, "
+            "total_legacy_area_m2, region_count FROM global_distortion_index "
+            "ORDER BY global_distortion_percent DESC"
+        )
+        rows = db.cur.fetchall()
+    if not rows:
+        raise HTTPException(404, "No distortion metrics found. Run compare_ingestion.py first.")
+    return {
+        "projections": [
+            {
+                "projection": r[0],
+                "global_distortion_percent": r[1],
+                "total_physical_area_m2": r[2],
+                "total_legacy_area_m2": r[3],
+                "region_count": r[4],
+            }
+            for r in rows
+        ],
+        "note": "Global Distortion Index = Σ|area_physical - area_legacy| / Σ area_physical × 100",
+    }
+
+
+@app.get("/api/distortion/region/{region_name}")
+async def distortion_region(region_name: str, projection: str = Query(None)):
+    """Get distortion metrics for a specific region."""
+    with Database() as db:
+        if projection:
+            db.cur.execute(
+                "SELECT region_name, projection, area_physical_m2, area_legacy_m2, "
+                "absolute_error_m2, relative_error_percent, distortion_category "
+                "FROM distortion_metrics WHERE region_name=%s AND projection=%s",
+                (region_name, projection),
+            )
+        else:
+            db.cur.execute(
+                "SELECT region_name, projection, area_physical_m2, area_legacy_m2, "
+                "absolute_error_m2, relative_error_percent, distortion_category "
+                "FROM distortion_metrics WHERE region_name=%s ORDER BY relative_error_percent",
+                (region_name,),
+            )
+        rows = db.cur.fetchall()
+    if not rows:
+        raise HTTPException(404, f"No metrics found for region '{region_name}'.")
+    return {
+        "region": region_name,
+        "metrics": [
+            {
+                "region": r[0], "projection": r[1],
+                "area_physical_m2": r[2], "area_legacy_m2": r[3],
+                "absolute_error_m2": r[4], "relative_error_percent": r[5],
+                "distortion_category": r[6],
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.get("/api/distortion/ranking")
+async def distortion_ranking(
+    order: str = Query("desc", regex="^(desc|asc)$"),
+    projection: str = Query("Mercator"),
+    limit: int = Query(20, ge=1, le=200),
+):
+    """Get regions ranked by relative error magnitude."""
+    with Database() as db:
+        db.cur.execute(
+            "SELECT region_name, area_physical_m2, area_legacy_m2, "
+            "absolute_error_m2, relative_error_percent, distortion_category "
+            "FROM distortion_metrics WHERE projection=%s "
+            "ORDER BY ABS(relative_error_percent) " + ("DESC" if order == "desc" else "ASC") + " "
+            "LIMIT %s",
+            (projection, limit),
+        )
+        rows = db.cur.fetchall()
+    return {
+        "projection": projection,
+        "order": order,
+        "ranking": [
+            {
+                "region": r[0],
+                "area_physical_m2": r[1],
+                "area_legacy_m2": r[2],
+                "absolute_error_m2": r[3],
+                "relative_error_percent": r[4],
+                "distortion_category": r[5],
+            }
+            for r in rows
+        ],
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

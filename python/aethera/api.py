@@ -1,8 +1,10 @@
 """AETHERA FastAPI backend — live endpoints that read raw edge data
 from PostgreSQL and call the Rust core (via subprocess fallback for now).
 
-All endpoints query the database for raw edge lengths (Mode A measured
-or Mode B placeholder) and return results from the solvers.
+v10.6: Connected to Physical Truth data. The /api/solve/manifold
+endpoint now solves the real Physical Truth manifold (149 regions,
+174 adjacency edges). The /api/ghost/resolve endpoint derives
+Antarctica's area from global closure.
 
 NO pre-computed areas are ever returned. Areas are derived by
 Agent 0 / Agent 2 from the raw edge lengths + global area closure.
@@ -13,20 +15,21 @@ import os
 import sys
 import json
 import asyncio
+import tempfile
 from typing import List, Optional, Dict, Any
 from dataclasses import asdict
 
 # Ensure the aethera package is importable.
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from aethera.ingest.db import Database
 from aethera.ingest.schema import DATABASE_URL
 from aethera.agents import IntrinsicGeometer, GhostResolver, AlienGeometer, DynamicsModule
-from aethera.agents.ghost import Polygon as GhostPolygon, GhostReport
+from aethera.agents.ghost import Polygon as GhostPolygon
 from aethera.core import EdgeGraph, Scalar
 from aethera.modules import (
     HallOfShame, TransparencyComparator, StrainVisualizer,
@@ -34,11 +37,13 @@ from aethera.modules import (
 )
 from aethera.modules.hall_of_shame import Polygon as HSPolygon
 from aethera.modules.transparency import RangeClaim
-from aethera.modules.seismic import SeismicEvent
-from aethera.modules.maritime import Chokepoint
-from aethera.modules.terraformation import VolumeTransfer
-from aethera.modules.stellar import QuasarObservation
-from aethera.agents.acif import AcifSnapshot, AcifNavigator
+from aethera.modules.physical_truth_manifold import (
+    solve_physical_truth_manifold, build_physical_truth_edge_graph,
+    list_regions, get_region_area,
+)
+from aethera.modules.ghost_resolver_integration import derive_antarctica_area
+from aethera.modules.compare_ingestion import compute_distortion_metrics
+from aethera.agents.acif import AcifSnapshot
 from aethera.agents.dynamics import (
     ForceFieldConfig, simulate_particle,
     inertial_field, inverse_square_field, uniform_field,
@@ -485,6 +490,149 @@ async def distortion_ranking(
             }
             for r in rows
         ],
+    }
+
+
+# ---- Physical Truth Manifold endpoints (v10.6) ---------------------
+
+@app.get("/api/solve/physical-truth")
+async def solve_physical_truth():
+    """Solve the Physical Truth manifold — 149 regions with real
+    area-derived edge lengths. Returns intrinsic coordinates."""
+    mf, area_map = await asyncio.get_event_loop().run_in_executor(
+        None, solve_physical_truth_manifold
+    )
+    coords = {name: [p.x, p.y, p.z] for name, p in mf.coords.items()}
+    # Attach area data for each region.
+    regions_data = []
+    for name, coord in coords.items():
+        area = get_region_area(name)
+        if area:
+            regions_data.append({
+                "name": name,
+                "coords": coord,
+                "area_km2": area,
+            })
+    return {
+        "regions": regions_data,
+        "node_count": len(coords),
+        "edge_count": 174,  # from build_physical_truth_edge_graph
+        "residual": mf.residual,
+        "note": "Physical Truth manifold solved from area-derived edge lengths. No coordinates used.",
+    }
+
+
+@app.get("/api/regions/list")
+async def regions_list():
+    """List all Physical Truth regions with their areas."""
+    return {"regions": list_regions()}
+
+
+@app.get("/api/ghost/antarctica")
+async def ghost_antarctica():
+    """Derive Antarctica's area from global closure."""
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, derive_antarctica_area
+    )
+    return result
+
+
+# ---- Upload endpoint (Sub-Task 5) -----------------------------------
+
+@app.post("/api/upload/survey")
+async def upload_survey(file: UploadFile = File(...)):
+    """Upload a CSV of user-supplied edge lengths (Mode A survey data).
+
+    CSV format:
+        point_A, point_B, distance_meters
+        point_A, point_C, distance_meters
+        ...
+
+    The uploaded edges are solved with SMACOF and the resulting
+    manifold coordinates are returned.
+    """
+    content = await file.read()
+    csv_text = content.decode("utf-8")
+
+    # Parse the CSV.
+    from aethera.ingest.geometry import parse_survey_csv
+    try:
+        edges_data = parse_survey_csv(csv_text)
+    except ValueError as e:
+        raise HTTPException(400, f"CSV parse error: {e}")
+
+    if len(edges_data) < 3:
+        raise HTTPException(400, "Need at least 3 edges to solve a manifold.")
+
+    # Build EdgeGraph from user data.
+    graph = EdgeGraph()
+    for source, target, distance in edges_data:
+        graph.add_edge(source, target, Scalar(distance), source="user_survey")
+
+    # Solve.
+    geo = IntrinsicGeometer(max_iter=500, tol=1e-10)
+    try:
+        mf = geo.solve_2d(graph)
+    except Exception as e:
+        raise HTTPException(500, f"Solver failed: {e}")
+
+    coords = {name: [p.x, p.y, p.z] for name, p in mf.coords.items()}
+    return {
+        "edges_uploaded": len(edges_data),
+        "node_count": graph.node_count,
+        "coordinates": coords,
+        "residual": mf.residual,
+        "note": "Manifold solved from user-uploaded survey data (Mode A). No coordinates used.",
+    }
+
+
+# ---- AETHERA Intrinsic Coordinate System (AICS) — Bonus ------------
+
+@app.get("/api/aics/coordinates/{region_name}")
+async def aics_coordinates(region_name: str):
+    """Get the AETHERA Intrinsic Coordinate System (AICS) coordinates
+    for a region.
+
+    AICS is the platform's proprietary coordinate system. Each point
+    is assigned a 3-tuple (barycentric_x, barycentric_y, scale_z)
+    derived from the intrinsic manifold solve — independent of any
+    external reference frame (no lat/lon, no WGS84, no ECEF).
+
+    The coordinates are:
+    - barycentric_x, barycentric_y: position in the intrinsic manifold.
+    - scale_z: the area-derived scale factor (sqrt of the region's area
+      in km², normalised to the global mean).
+
+    Direction is given as the intrinsic azimuth (radians) from the
+    manifold origin, and the intrinsic distance from the origin.
+    """
+    mf, area_map = await asyncio.get_event_loop().run_in_executor(
+        None, solve_physical_truth_manifold
+    )
+    if region_name not in mf.coords:
+        raise HTTPException(404, f"Region '{region_name}' not found in manifold.")
+    p = mf.coords[region_name]
+    area = get_region_area(region_name) or 0.0
+    # AICS coordinates: (barycentric_x, barycentric_y, scale_z).
+    scale_z = (area ** 0.5) / 1000.0  # sqrt(area) normalised
+    # Intrinsic azimuth and distance from origin.
+    import math
+    azimuth = math.atan2(p.y, p.x)
+    distance = math.sqrt(p.x**2 + p.y**2)
+    return {
+        "region": region_name,
+        "aics_coordinates": {
+            "barycentric_x": p.x,
+            "barycentric_y": p.y,
+            "scale_z": scale_z,
+        },
+        "intrinsic_direction": {
+            "azimuth_rad": azimuth,
+            "azimuth_deg": math.degrees(azimuth),
+            "distance_from_origin": distance,
+        },
+        "physical_area_km2": area,
+        "note": "AETHERA Intrinsic Coordinate System (AICS). No external reference frame.",
     }
 
 

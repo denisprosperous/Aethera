@@ -1,0 +1,19 @@
+{
+  "service": {
+    "name": "aethera-backend",
+    "type": "web",
+    "env": "docker",
+    "dockerfilePath": "./Dockerfile",
+    "healthCheckPath": "/api/health",
+    "envVars": [
+      {
+        "key": "DATABASE_URL",
+        "sync": false
+      },
+      {
+        "key": "PORT",
+        "value": "8000"
+      }
+    ]
+  }
+}

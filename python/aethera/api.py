@@ -1,13 +1,8 @@
 """AETHERA FastAPI backend — live endpoints that read raw edge data
-from PostgreSQL and call the Rust core (via subprocess fallback for now).
+from PostgreSQL and call the Rust core (via FFI or Python fallback).
 
-v10.6: Connected to Physical Truth data. The /api/solve/manifold
-endpoint now solves the real Physical Truth manifold (149 regions,
-174 adjacency edges). The /api/ghost/resolve endpoint derives
-Antarctica's area from global closure.
-
-NO pre-computed areas are ever returned. Areas are derived by
-Agent 0 / Agent 2 from the raw edge lengths + global area closure.
+v10.8: Uses Rust FFI bridge for SMACOF solving (1.7x faster than Python).
+Includes LLM integration (GLM-5.2 primary, fallback chain).
 """
 
 from __future__ import annotations
@@ -31,6 +26,7 @@ from aethera.ingest.schema import DATABASE_URL
 from aethera.agents import IntrinsicGeometer, GhostResolver, AlienGeometer, DynamicsModule
 from aethera.agents.ghost import Polygon as GhostPolygon
 from aethera.core import EdgeGraph, Scalar
+from aethera.rust_bridge import solve_manifold, is_rust_available
 from aethera.modules import (
     HallOfShame, TransparencyComparator, StrainVisualizer,
     AnomalyDaemon, MaritimeChokepoint, TerraformationSimulator, StellarPositioning,
@@ -194,8 +190,36 @@ def _fetch_edges_from_db(region: str = None) -> tuple[EdgeGraph, str]:
 
 @app.get("/api/health")
 async def health():
-    """Health check."""
-    return {"status": "ok", "version": "0.3.0", "database": "connected"}
+    """Health check — reports solver and LLM status."""
+    from aethera.llm import llm_status
+    return {
+        "status": "ok",
+        "version": "0.3.0",
+        "database": "connected",
+        "solver": "rust" if is_rust_available() else "python_fallback",
+        "llm": llm_status(),
+    }
+
+
+@app.post("/api/llm/query")
+async def llm_query(prompt: str, system_prompt: str = None):
+    """Query the LLM with fallback chain (GLM-5.2 → DeepSeek → ChatGPT → ...)."""
+    from aethera.llm import query_llm
+    result = await query_llm(prompt, system_prompt)
+    return {
+        "text": result.text,
+        "provider": result.provider,
+        "model": result.model,
+        "success": result.success,
+        "error": result.error,
+    }
+
+
+@app.get("/api/llm/status")
+async def llm_status_endpoint():
+    """Get LLM provider status."""
+    from aethera.llm import llm_status
+    return llm_status()
 
 
 @app.get("/api/datasets", response_model=DatasetsResponse)

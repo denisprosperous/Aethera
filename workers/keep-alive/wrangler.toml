@@ -1,0 +1,10 @@
+name = "aethera-keep-alive"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[triggers]
+# Every 10 minutes — prevents Render free tier cold starts (15min timeout)
+crons = ["*/10 * * * *"]
+
+[vars]
+RENDER_APP_URL = "https://aethera-backend.onrender.com"

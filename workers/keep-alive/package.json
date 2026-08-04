@@ -1,0 +1,9 @@
+{
+  "name": "aethera-keep-alive-worker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "npx wrangler deploy",
+    "dev": "npx wrangler dev"
+  }
+}

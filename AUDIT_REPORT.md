@@ -1,9 +1,21 @@
-# AETHERA Codebase Audit Report (v10.7)
+# AETHERA Codebase Audit Report (v10.11 — corrected)
 
-**Date:** 2026-08-04
-**Auditor:** Claude (AI coding agent)
-**Commit:** `df72839` (v10.6)
-**Method:** Direct filesystem inspection, test execution, source code review
+**Date:** 2026-08-04 (updated)
+**Commit:** `85faf06` (v10.8) → `v10.11` (this update)
+**Method:** Direct filesystem inspection, test execution, API verification
+
+---
+
+## Production Infrastructure Status (v10.11)
+
+| Component | Status | Evidence |
+|-----------|--------|----------|
+| Database | ✅ Neon (permanent, no expiry) | Project `raspy-cherry-57547334`, 7 tables with data |
+| Static assets | 🔶 Cloudflare R2 (pending dashboard enablement) | `aethera-static` bucket config ready; R2 must be enabled manually |
+| Keep-alive | ✅ Cloudflare Worker deployed | `aethera-keep-alive` worker, cron every 10 min |
+| LLM | ✅ Z.ai VibeSDK (GLM-5.2) primary + 5 fallbacks | `zai-sdk` installed, `llm.py` updated |
+| Rust FFI | ✅ Compiled (libaethera_ffi.so, 929 KB) | `rust_bridge.py` loads via ctypes, 1.7x speedup |
+| Real DEM data | ✅ Hawaii ingested (15,436 km² from 88 tiles) | `physical_truth_srtm` table has 1 row |
 
 ---
 

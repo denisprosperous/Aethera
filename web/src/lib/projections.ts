@@ -1,3 +1,5 @@
+/** AETHERA projection functions — pure TypeScript, no coordinate assumptions. */
+
 export type Projection = (lon: number, lat: number) => [number, number];
 
 export const mercator: Projection = (lon, lat) => {
@@ -77,24 +79,19 @@ export function strainField(polygons: Polygon[], proj: Projection, projName: str
   });
 }
 
-export function colonialDistortionScore(polygons: Polygon[], proj: Projection, projName: string): DistortionScore {
-  const strains = strainField(polygons, proj, projName);
-  const cs = strains.filter((_, i) => polygons[i].coloniser).map((s) => s.logStrain);
-  const ds = strains.filter((_, i) => !polygons[i].coloniser).map((s) => s.logStrain);
-  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(xs.length, 1);
-  const mc = mean(cs); const md = mean(ds);
-  const allS = strains.map((s) => s.logStrain);
-  const ma = mean(allS);
-  const std = allS.length > 0 ? Math.sqrt(allS.reduce((s, x) => s + (x-ma)**2, 0) / allS.length) : 0;
-  const score = mc - md;
-  return {
-    projection: projName, meanLogStrain: ma, stdLogStrain: std,
-    maxInflation: Math.max(...allS, 0), maxDeflation: Math.min(...allS, 0),
-    colonialDistortionScore: score,
-    note: `${projName}: coloniser mean ${mc.toFixed(3)}, colonised mean ${md.toFixed(3)}. Score ${score.toFixed(3)}.`,
-  };
-}
-
 export function allScores(polygons: Polygon[]): DistortionScore[] {
-  return Object.entries(PROJECTIONS).map(([name, p]) => colonialDistortionScore(polygons, p, name));
+  return Object.entries(PROJECTIONS).map(([name, p]) => {
+    const strains = strainField(polygons, p, name);
+    const cs = strains.filter((_, i) => polygons[i].coloniser).map((s) => s.logStrain);
+    const ds = strains.filter((_, i) => !polygons[i].coloniser).map((s) => s.logStrain);
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(xs.length, 1);
+    const mc = mean(cs); const md = mean(ds);
+    const allS = strains.map((s) => s.logStrain);
+    const ma = mean(allS);
+    const std = allS.length > 0 ? Math.sqrt(allS.reduce((s, x) => s + (x-ma)**2, 0) / allS.length) : 0;
+    return { projection: name, meanLogStrain: ma, stdLogStrain: std,
+             maxInflation: Math.max(...allS, 0), maxDeflation: Math.min(...allS, 0),
+             colonialDistortionScore: mc - md,
+             note: `${name}: coloniser mean ${mc.toFixed(3)}, colonised mean ${md.toFixed(3)}.` };
+  });
 }

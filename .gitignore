@@ -1,17 +1,74 @@
-rust/target/
-rust/**/target/
-**/*.rs.bk
-python/__pycache__/
-python/**/__pycache__/
-*.pyc
-*.pyo
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
-.venv/
-web/node_modules/
-web/.next/
-web/out/
-web/.env*.local
+.installed.cfg
+*.egg
+
+# Node
+node_modules/
+.next/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Cache
+.cache/
+data/
+*.db
+*.db-journal
+
+# Logs
 *.log
+logs/
+
+# Rust
+rust/target/
+*.dll
+*.so
+*.dylib
+
+# Terrarium tiles
+.cache/terrarium/
+
+# Frontend build artifacts
+frontend/.next/
+frontend/node_modules/
+frontend/.cache/
+
+# Backend data
+backend/.data/
+backend/.cache/

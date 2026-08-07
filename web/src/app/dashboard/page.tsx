@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
 import { MODULES } from '@/components/ModuleConfig';
 import { Activity, Clock } from 'lucide-react';
 
@@ -24,7 +23,7 @@ export default function Dashboard() {
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto' }}>
-          {MODULES.map((mod, i) => (
+          {MODULES.map((mod) => (
             <button
               key={mod.id}
               onClick={() => router.push(mod.path)}
@@ -60,12 +59,9 @@ export default function Dashboard() {
           gap: 'var(--space-lg)',
           alignContent: 'start'
         }}>
-          {MODULES.map((mod, i) => (
-            <motion.div
+          {MODULES.map((mod) => (
+            <div
               key={mod.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05, duration: 0.4, ease: 'easeOut' }}
               className="card"
               style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)', cursor: 'pointer', height: '100%' }}
               onClick={() => router.push(mod.path)}
@@ -94,7 +90,7 @@ export default function Dashboard() {
                   Open →
                 </button>
               </div>
-            </motion.div>
+            </div>
           ))}
         </div>
 

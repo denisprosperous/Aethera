@@ -10,11 +10,14 @@
   "dependencies": {
     "@react-three/drei": "^10.0.0",
     "@react-three/fiber": "^9.0.0",
+    "framer-motion": "^13.0.0",
+    "lucide-react": "^1.29.0",
     "next": "^16.3.0",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "three": "0.180.0",
-    "z-ai-web-dev-sdk": "latest"
+    "z-ai-web-dev-sdk": "latest",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

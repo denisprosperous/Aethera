@@ -1,18 +1,15 @@
 "use client";
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
+import { useRouter, useParams } from 'next/navigation';
+import { MODULES } from '@/components/ModuleConfig';
 import { ChevronLeft, Activity, Clock, Hash, Loader2 } from 'lucide-react';
-import { MODULES } from '../../components/ModuleConfig';
 
-interface ModulePageProps {
-  params: { moduleId: string };
-}
-
-const ModulePage: React.FC<ModulePageProps> = ({ params }) => {
+export default function ModulePage() {
+  const params = useParams();
   const router = useRouter();
-  const moduleId = params.moduleId;
+  const moduleId = params.moduleId as string;
+  
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
@@ -23,14 +20,21 @@ const ModulePage: React.FC<ModulePageProps> = ({ params }) => {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
         <h1 style={{ fontSize: '24px', fontWeight: 300, marginBottom: 'var(--space-lg)' }}>Module not found</h1>
-        <button onClick={() => router.push('/')} className="btn-ghost">
+        <button onClick={() => router.push('/dashboard')} className="btn-ghost">
           <ChevronLeft size={16} /> Back to Dashboard
         </button>
       </div>
     );
   }
 
-  const Icon = module.icon;
+  const Icon = module.icon === '👻' ? '👻' : 
+               module.icon === '📐' ? '📐' :
+               module.icon === '📍' ? '📍' :
+               module.icon === '🪐' ? '🪐' :
+               module.icon === '🌍' ? '🌍' :
+               module.icon === '🔍' ? '🔍' :
+               module.icon === '🌊' ? '🌊' :
+               module.icon === '⭐' ? '⭐' : '⚠️';
 
   const runTest = async () => {
     setLoading(true);
@@ -139,8 +143,8 @@ const ModulePage: React.FC<ModulePageProps> = ({ params }) => {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Request failed');
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Request failed');
       }
 
       const data = await response.json();
@@ -156,13 +160,12 @@ const ModulePage: React.FC<ModulePageProps> = ({ params }) => {
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' }}>
       <nav style={{ width: '220px', background: 'var(--bg-surface)', borderRight: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', padding: 'var(--space-lg)' }}>
-        <button onClick={() => router.push('/')} className="btn-ghost" style={{ marginBottom: 'var(--space-lg)', display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
+        <button onClick={() => router.push('/dashboard')} className="btn-ghost" style={{ marginBottom: 'var(--space-lg)', display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
           <ChevronLeft size={16} /> Dashboard
         </button>
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {MODULES.map(m => {
             const isActive = m.id === moduleId;
-            const MIcon = m.icon;
             return (
               <button
                 key={m.id}
@@ -178,7 +181,7 @@ const ModulePage: React.FC<ModulePageProps> = ({ params }) => {
                   fontFamily: 'var(--font-mono)', fontSize: '12px',
                 }}
               >
-                <MIcon size={14} />
+                <span>{m.icon}</span>
                 {m.name}
               </button>
             );
@@ -190,7 +193,7 @@ const ModulePage: React.FC<ModulePageProps> = ({ params }) => {
         <header style={{ marginBottom: 'var(--space-xl)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)', marginBottom: 'var(--space-md)' }}>
             <div style={{ padding: 'var(--space-sm)', background: 'var(--bg-app)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-              <Icon size={20} color="var(--accent-cyan)" />
+              <span style={{ fontSize: '20px' }}>{Icon}</span>
             </div>
             <div>
               <h1 style={{ fontSize: '20px', fontWeight: 400, letterSpacing: '1px' }}>{module.name}</h1>
@@ -199,13 +202,13 @@ const ModulePage: React.FC<ModulePageProps> = ({ params }) => {
           </div>
         </header>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="card glass-panel" style={{ marginBottom: 'var(--space-lg)' }}>
+        <div className="card glass-panel" style={{ marginBottom: 'var(--space-lg)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-md)' }}>
             <h3 style={{ fontSize: '14px', fontWeight: 500, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
               Run Test
             </h3>
             <button className="btn-primary" onClick={runTest} disabled={loading} style={{ opacity: loading ? 0.6 : 1 }}>
-              {loading ? <><Loader2 size={14} className="animate-spin" /> Computing...</> : 'Execute'}
+              {loading ? <><Loader2 size={14} /> Computing...</> : 'Execute'}
             </button>
           </div>
           {error && (
@@ -213,10 +216,10 @@ const ModulePage: React.FC<ModulePageProps> = ({ params }) => {
               {error}
             </div>
           )}
-        </motion.div>
+        </div>
 
         {result && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="card glass-panel">
+          <div className="card glass-panel">
             <div style={{ display: 'flex', gap: 'var(--space-xl)', marginBottom: 'var(--space-md)', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
                 <Activity size={14} color="var(--accent-emerald)" />
@@ -334,55 +337,9 @@ const ModulePage: React.FC<ModulePageProps> = ({ params }) => {
                 {result.summary}
               </div>
             )}
-
-            {result.anomalies && result.anomalies.length > 0 && (
-              <div style={{ marginTop: 'var(--space-lg)' }}>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 'var(--space-sm)' }}>Detected Anomalies ({result.anomalies.length})</div>
-                {result.anomalies.map((a: any, i: number) => (
-                  <div key={i} style={{ padding: 'var(--space-md)', background: 'hsla(38,100%,50%,0.05)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)', marginBottom: 'var(--space-sm)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--space-sm)' }}>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--accent-amber)' }}>{a.vertex_id}</span>
-                      {a.z_score && <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-muted)' }}>z: {a.z_score.toFixed(2)}</span>}
-                    </div>
-                    {a.explanation && <p style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{a.explanation}</p>}
-                    {a.drift !== undefined && <p style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>Drift: {a.drift.toFixed(4)} m/unit</p>}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {result.strain_tensors && result.strain_tensors.length > 0 && (
-              <div style={{ marginTop: 'var(--space-lg)' }}>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 'var(--space-sm)' }}>Strain Tensors</div>
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', fontFamily: 'var(--font-mono)' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                        <th style={{ padding: 'var(--space-sm)', textAlign: 'left', color: 'var(--text-muted)' }}>Vertex</th>
-                        <th style={{ padding: 'var(--space-sm)', textAlign: 'right', color: 'var(--accent-cyan)' }}>ε_xx</th>
-                        <th style={{ padding: 'var(--space-sm)', textAlign: 'right', color: 'var(--accent-cyan)' }}>ε_yy</th>
-                        <th style={{ padding: 'var(--space-sm)', textAlign: 'right', color: 'var(--accent-cyan)' }}>ε_xy</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.strain_tensors.slice(0, 20).map((s: any, i: number) => (
-                        <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                          <td style={{ padding: 'var(--space-sm)' }}>v{i}</td>
-                          <td style={{ padding: 'var(--space-sm)', textAlign: 'right' }}>{s.xx?.toFixed(6)}</td>
-                          <td style={{ padding: 'var(--space-sm)', textAlign: 'right' }}>{s.yy?.toFixed(6)}</td>
-                          <td style={{ padding: 'var(--space-sm)', textAlign: 'right' }}>{s.xy?.toFixed(6)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </motion.div>
+          </div>
         )}
       </main>
     </div>
   );
-};
-
-export default ModulePage;
+}

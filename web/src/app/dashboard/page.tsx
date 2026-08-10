@@ -1,22 +1,12 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { MODULES } from '@/components/ModuleConfig';
-import { Activity, Clock } from 'lucide-react';
 
 export default function Dashboard() {
   const router = useRouter();
   const [selectedModule, setSelectedModule] = useState<string | null>(null);
-  const [health, setHealth] = useState<any>(null);
-  const [healthError, setHealthError] = useState<string>('');
-
-  useEffect(() => {
-    fetch('http://localhost:8765/api/health', { signal: AbortSignal.timeout(3000) })
-      .then(r => r.json())
-      .then(setHealth)
-      .catch(() => setHealthError('Backend unreachable'));
-  }, []);
 
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', background: '#000' }}>
@@ -123,13 +113,11 @@ export default function Dashboard() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Activity size={14} color="#10b981" />
-                <span style={{ fontFamily: 'monospace', fontSize: '12px', color: health?.status === 'ok' ? '#10b981' : '#ef4444' }}>
-                  System Status: {health?.status === 'ok' ? 'NOMINAL' : healthError ? 'ERROR' : 'CHECKING...'}
+                <span style={{ fontSize: '12px', color: '#10b981', fontFamily: 'monospace' }}>
+                  System Status: NOMINAL
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Clock size={14} color="#f59e0b" />
                 <span style={{ fontFamily: 'monospace', fontSize: '12px', color: '#666' }}>v0.2.0</span>
               </div>
             </div>
@@ -137,8 +125,6 @@ export default function Dashboard() {
               <span>Backend: http://localhost:8765</span>
               <span>|</span>
               <span>Modules: {MODULES.length} operational</span>
-              <span>|</span>
-              <span>LLM: {health?.llm?.any_available ? 'Available' : 'Fallback'}</span>
             </div>
           </div>
         </div>

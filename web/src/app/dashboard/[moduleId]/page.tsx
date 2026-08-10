@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { MODULES } from '@/components/ModuleConfig';
-import { ChevronLeft, Activity, Clock, Hash, Loader2, AlertCircle } from 'lucide-react';
+import { ChevronLeft, Loader2, AlertCircle } from 'lucide-react';
 
 export default function ModulePage() {
   const params = useParams();
@@ -16,40 +16,19 @@ export default function ModulePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
   const [loadTime, setLoadTime] = useState<number>(0);
-  const [autoData, setAutoData] = useState<any>(null);
-
-  // Auto-load data for GET endpoints
-  useEffect(() => {
-    if (!module) return;
-    if (module.apiEndpoint.startsWith('/ghost/') || 
-        module.apiEndpoint.startsWith('/terraformation') ||
-        module.apiEndpoint.startsWith('/dynamics/') ||
-        module.apiEndpoint.startsWith('/alien/')) return;
-    
-    setLoading(true);
-    const start = Date.now();
-    fetch(`/api${module.apiEndpoint}`)
-      .then(r => r.json())
-      .then(data => {
-        setLoadTime(Date.now() - start);
-        setAutoData(data);
-        setResult(data);
-      })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [module]);
 
   const runTest = async () => {
-    if (!module || !module.testPayload) return;
+    if (!module) return;
     setLoading(true);
     setError('');
     const start = Date.now();
     
     try {
+      const isPost = !!module.testPayload;
       const res = await fetch(`/api${module.apiEndpoint}`, {
-        method: 'POST',
+        method: isPost ? 'POST' : 'GET',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(module.testPayload),
+        body: isPost ? JSON.stringify(module.testPayload) : undefined,
       });
       
       if (!res.ok) {
@@ -129,22 +108,22 @@ export default function ModulePage() {
         {/* Run Button */}
         <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={{ fontSize: '12px', fontWeight: 500, letterSpacing: '1px', textTransform: 'uppercase', color: '#333' }}>
-            Test Endpoint
+            {module.testPayload ? 'Run Test' : 'Load Data'}
           </h3>
           <button 
             onClick={runTest} 
-            disabled={loading || !module.testPayload}
+            disabled={loading}
             style={{
               padding: '8px 20px',
-              background: loading || !module.testPayload ? '#222' : '#06b6d4',
-              color: loading || !module.testPayload ? '#555' : '#000',
+              background: loading ? '#222' : '#06b6d4',
+              color: loading ? '#555' : '#000',
               border: 'none', borderRadius: '6px',
-              cursor: loading || !module.testPayload ? 'not-allowed' : 'pointer',
+              cursor: loading ? 'not-allowed' : 'pointer',
               fontSize: '13px', fontWeight: 600,
               display: 'flex', alignItems: 'center', gap: '8px',
             }}
           >
-            {loading ? <><Loader2 size={14} /> Computing...</> : module.testPayload ? 'Execute' : 'Auto-Loaded'}
+            {loading ? <><Loader2 size={14} /> Computing...</> : module.testPayload ? 'Execute' : 'Load'}
           </button>
         </div>
 
@@ -161,22 +140,13 @@ export default function ModulePage() {
             {/* Metrics Row */}
             <div style={{ display: 'flex', gap: '32px', marginBottom: '20px', paddingBottom: '16px', borderBottom: '1px solid #1a1a1a' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Activity size={14} color="#10b981" />
                 <span style={{ fontSize: '11px', color: '#333', textTransform: 'uppercase' }}>Status</span>
                 <span style={{ fontSize: '12px', color: '#10b981', fontFamily: 'monospace' }}>complete</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Clock size={14} color="#f59e0b" />
                 <span style={{ fontSize: '11px', color: '#333', textTransform: 'uppercase' }}>Load Time</span>
                 <span style={{ fontSize: '12px', fontFamily: 'monospace', color: loadTime < 1000 ? '#10b981' : '#f59e0b' }}>
                   {loadTime}ms
-                </span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Hash size={14} color="#06b6d4" />
-                <span style={{ fontSize: '11px', color: '#333', textTransform: 'uppercase' }}>Run ID</span>
-                <span style={{ fontSize: '12px', fontFamily: 'monospace', color: '#444' }}>
-                  {result.solver_run_id || result.run_id || 'auto'}
                 </span>
               </div>
             </div>
@@ -248,16 +218,14 @@ export default function ModulePage() {
             </div>
 
             {/* Data Display */}
-            {autoData && typeof autoData === 'object' && (
-              <div style={{ marginTop: '16px' }}>
-                <div style={{ fontSize: '11px', color: '#333', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px' }}>
-                  Results ({typeof autoData === 'object' && 'length' in autoData ? autoData.length : Object.keys(autoData).length} items)
-                </div>
-                <pre style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace', background: '#0a0a0a', padding: '12px', borderRadius: '6px', overflowX: 'auto', maxHeight: '300px', overflowY: 'auto', border: '1px solid #1a1a1a' }}>
-                  {JSON.stringify(autoData, null, 2)}
-                </pre>
+            <div style={{ marginTop: '16px' }}>
+              <div style={{ fontSize: '11px', color: '#333', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px' }}>
+                Raw Response
               </div>
-            )}
+              <pre style={{ fontSize: '11px', color: '#555', fontFamily: 'monospace', background: '#0a0a0a', padding: '12px', borderRadius: '6px', overflowX: 'auto', maxHeight: '400px', overflowY: 'auto', border: '1px solid #1a1a1a' }}>
+                {JSON.stringify(result, null, 2)}
+              </pre>
+            </div>
 
             {/* Note */}
             {result.note && (
@@ -272,7 +240,14 @@ export default function ModulePage() {
         {loading && !result && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '20px', background: '#0a0a0a', border: '1px solid #1a1a1a', borderRadius: '8px' }}>
             <Loader2 size={20} color="#06b6d4" />
-            <span style={{ color: '#555', fontFamily: 'monospace', fontSize: '13px' }}>Loading...</span>
+            <span style={{ color: '#555', fontFamily: 'monospace', fontSize: '13px' }}>Computing...</span>
+          </div>
+        )}
+
+        {/* Empty State */}
+        {!result && !loading && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px', background: '#0a0a0a', border: '1px solid #1a1a1a', borderRadius: '8px', color: '#333', fontFamily: 'monospace', fontSize: '13px' }}>
+            Click "Execute" to run the module test
           </div>
         )}
       </main>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { MODULES } from '@/components/ModuleConfig';
 import { Activity, Clock } from 'lucide-react';
@@ -8,34 +8,43 @@ import { Activity, Clock } from 'lucide-react';
 export default function Dashboard() {
   const router = useRouter();
   const [selectedModule, setSelectedModule] = useState<string | null>(null);
+  const [health, setHealth] = useState<any>(null);
+  const [healthError, setHealthError] = useState<string>('');
+
+  useEffect(() => {
+    fetch('http://localhost:8765/api/health', { signal: AbortSignal.timeout(3000) })
+      .then(r => r.json())
+      .then(setHealth)
+      .catch(() => setHealthError('Backend unreachable'));
+  }, []);
 
   return (
-    <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' }}>
-      <nav style={{ width: '240px', background: 'var(--bg-surface)', borderRight: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', padding: 'var(--space-lg)' }}>
-        <div style={{ marginBottom: 'var(--space-xl)', display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
+    <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', background: '#000' }}>
+      <nav style={{ width: '240px', background: '#0a0a0a', borderRight: '1px solid #1a1a1a', display: 'flex', flexDirection: 'column', padding: '20px' }}>
+        <div style={{ marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div style={{ 
-            width: '32px', height: '32px', 
-            background: 'var(--accent-cyan)', 
-            boxShadow: '0 0 16px hsla(186, 100%, 50%, 0.5)',
+            width: '28px', height: '28px', 
+            background: '#06b6d4', 
+            boxShadow: '0 0 12px rgba(6,182,212,0.4)',
             clipPath: 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)'
           }}></div>
-          <h1 style={{ fontFamily: 'var(--font-mono)', fontSize: '18px', fontWeight: 600, letterSpacing: '1px' }}>AETHERA</h1>
+          <h1 style={{ fontFamily: 'monospace', fontSize: '16px', fontWeight: 600, letterSpacing: '2px', color: '#fff' }}>AETHERA</h1>
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {MODULES.map((mod) => (
             <button
               key={mod.id}
-              onClick={() => router.push(mod.path)}
+              onClick={() => { setSelectedModule(mod.id); router.push(mod.path); }}
               style={{
-                display: 'flex', alignItems: 'center', gap: 'var(--space-sm)',
-                padding: 'var(--space-sm) var(--space-md)',
+                display: 'flex', alignItems: 'center', gap: '10px',
+                padding: '10px 12px',
                 width: '100%', textAlign: 'left',
-                background: selectedModule === mod.id ? 'hsla(186,100%,50%,0.1)' : 'transparent',
-                border: 'none', borderRadius: 'var(--radius-sm)',
-                color: selectedModule === mod.id ? 'var(--accent-cyan)' : 'var(--text-secondary)',
+                background: selectedModule === mod.id ? 'rgba(6,182,212,0.1)' : 'transparent',
+                border: 'none', borderRadius: '6px',
+                color: selectedModule === mod.id ? '#06b6d4' : '#888',
                 cursor: 'pointer', marginBottom: '2px',
-                fontFamily: 'var(--font-mono)', fontSize: '12px',
+                fontFamily: 'monospace', fontSize: '12px',
               }}
             >
               <span style={{ fontSize: '16px' }}>{mod.icon}</span>
@@ -45,10 +54,10 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 'var(--space-2xl)', overflowY: 'auto' }}>
-        <header style={{ marginBottom: 'var(--space-2xl)' }}>
-          <h2 style={{ fontSize: '24px', fontWeight: 300, letterSpacing: '2px' }}>SYSTEM OVERVIEW</h2>
-          <p style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '13px', marginTop: 'var(--space-xs)' }}>
+      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '32px', overflowY: 'auto' }}>
+        <header style={{ marginBottom: '32px' }}>
+          <h2 style={{ fontSize: '22px', fontWeight: 300, letterSpacing: '2px', color: '#fff' }}>SYSTEM OVERVIEW</h2>
+          <p style={{ color: '#444', fontFamily: 'monospace', fontSize: '12px', marginTop: '8px' }}>
             Sovereign Computational Geometry Platform — Absolute Geometric Substrate
           </p>
         </header>
@@ -56,37 +65,47 @@ export default function Dashboard() {
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-          gap: 'var(--space-lg)',
+          gap: '16px',
           alignContent: 'start'
         }}>
           {MODULES.map((mod) => (
             <div
               key={mod.id}
-              className="card"
-              style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)', cursor: 'pointer', height: '100%' }}
+              style={{
+                display: 'flex', flexDirection: 'column', gap: '12px',
+                cursor: 'pointer', height: '100%',
+                padding: '16px',
+                background: '#0a0a0a',
+                border: '1px solid #1a1a1a',
+                borderRadius: '8px',
+                transition: 'border-color 0.2s',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.borderColor = '#06b6d4')}
+              onMouseLeave={e => (e.currentTarget.style.borderColor = '#1a1a1a')}
               onClick={() => router.push(mod.path)}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <div style={{
-                    padding: 'var(--space-sm)',
-                    background: 'var(--bg-app)',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border-subtle)'
+                    padding: '8px',
+                    background: '#111',
+                    borderRadius: '6px',
+                    border: '1px solid #222',
+                    fontSize: '20px',
                   }}>
-                    <span style={{ fontSize: '20px' }}>{mod.icon}</span>
+                    {mod.icon}
                   </div>
-                  <h3 style={{ fontSize: '14px', fontWeight: 500 }}>{mod.name}</h3>
+                  <h3 style={{ fontSize: '13px', fontWeight: 500, color: '#e2e8f0' }}>{mod.name}</h3>
                 </div>
-                <div className="status-dot active" title="Operational" />
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 6px #10b981' }} />
               </div>
 
-              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5, flex: 1 }}>
+              <p style={{ fontSize: '11px', color: '#555', lineHeight: 1.6, flex: 1 }}>
                 {mod.description}
               </p>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'auto' }}>
-                <button className="btn-ghost" style={{ fontSize: '11px', padding: 'var(--space-xs) var(--space-sm)' }}>
+                <button style={{ fontSize: '11px', padding: '4px 12px', background: 'transparent', border: '1px solid #222', color: '#666', borderRadius: '4px', cursor: 'pointer', fontFamily: 'monospace' }}>
                   Open →
                 </button>
               </div>
@@ -94,34 +113,32 @@ export default function Dashboard() {
           ))}
         </div>
 
-        <div style={{ marginTop: 'auto', paddingTop: 'var(--space-xl)' }}>
+        <div style={{ marginTop: 'auto', paddingTop: '24px' }}>
           <div style={{
             width: '100%',
-            padding: 'var(--space-md)',
-            background: 'var(--bg-surface)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 'var(--radius-md)',
+            padding: '16px',
+            background: '#0a0a0a',
+            border: '1px solid #1a1a1a',
+            borderRadius: '8px',
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--space-sm)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
-                <Activity size={14} color="var(--accent-emerald)" />
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-mono)' }}>
-                  System Status: NOMINAL
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Activity size={14} color="#10b981" />
+                <span style={{ fontFamily: 'monospace', fontSize: '12px', color: health?.status === 'ok' ? '#10b981' : '#ef4444' }}>
+                  System Status: {health?.status === 'ok' ? 'NOMINAL' : healthError ? 'ERROR' : 'CHECKING...'}
                 </span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
-                <Clock size={14} color="var(--accent-amber)" />
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                  v0.2.0
-                </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Clock size={14} color="#f59e0b" />
+                <span style={{ fontFamily: 'monospace', fontSize: '12px', color: '#666' }}>v0.2.0</span>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 'var(--space-md)', fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' }}>
+            <div style={{ display: 'flex', gap: '16px', fontFamily: 'monospace', fontSize: '11px', color: '#444' }}>
               <span>Backend: http://localhost:8765</span>
               <span>|</span>
-              <span>API: 9 modules operational</span>
+              <span>Modules: {MODULES.length} operational</span>
               <span>|</span>
-              <span>LLM: Agnes-AI (no key)</span>
+              <span>LLM: {health?.llm?.any_available ? 'Available' : 'Fallback'}</span>
             </div>
           </div>
         </div>

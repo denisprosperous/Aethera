@@ -31,6 +31,7 @@ from aethera.modules import (
     HallOfShame, TransparencyComparator, StrainVisualizer,
     AnomalyDaemon, MaritimeChokepoint, TerraformationSimulator, StellarPositioning,
 )
+from aethera.modules.terraformation import VolumeTransfer
 from aethera.modules.hall_of_shame import Polygon as HSPolygon
 from aethera.modules.transparency import RangeClaim
 from aethera.modules.physical_truth_manifold import (
@@ -343,7 +344,7 @@ async def dynamics_simulate(req: DynamicsSimulateRequest):
     config = ForceFieldConfig(dt=req.dt, t_max=req.t_max, force_law_note=req.force_law)
     result = simulate_particle(
         start=tuple(req.start),
-        initial_velocity=tuple(req.initial_velocity),
+        vel0=tuple(req.initial_velocity),
         accel_fn=accel_fn,
         config=config,
     )

@@ -25,7 +25,7 @@ export default function Dashboard() {
           {MODULES.map((mod) => (
             <button
               key={mod.id}
-              onClick={() => { setSelectedModule(mod.id); router.push(mod.path); }}
+              onClick={() => { setSelectedModule(mod.id); router.push(`/dashboard/${mod.id}`); }}
               style={{
                 display: 'flex', alignItems: 'center', gap: '10px',
                 padding: '10px 12px',
@@ -72,7 +72,7 @@ export default function Dashboard() {
               }}
               onMouseEnter={e => (e.currentTarget.style.borderColor = '#06b6d4')}
               onMouseLeave={e => (e.currentTarget.style.borderColor = '#1a1a1a')}
-              onClick={() => router.push(mod.path)}
+              onClick={() => router.push(`/dashboard/${mod.id}`)}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>

@@ -264,6 +264,38 @@ async def llm_status_endpoint():
     return llm_status()
 
 
+@app.get("/api/llm")
+async def llm_status_alias():
+    """Alias of /api/llm/status — keeps the dashboard palette working
+    against either backend (Railway FastAPI or Vercel serverless)."""
+    from aethera.llm import llm_status
+    return llm_status()
+
+
+@app.post("/api/llm")
+async def llm_query_alias(body: Optional[Dict[str, Any]] = None):
+    """Alias of /api/llm/query — same {success,text,provider,model,error}
+    contract as the Next.js /api/llm route handler, so the Ctrl+K palette
+    works unchanged against either backend. Accepts {prompt,
+    system_prompt?, model?, api_key? | apiKey?}."""
+    from aethera.llm import query_llm
+    body = body or {}
+    prompt = body.get("prompt")
+    system_prompt = body.get("system_prompt") or body.get("systemPrompt")
+    model = body.get("model")
+    api_key = body.get("api_key") or body.get("apiKey")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+    result = await query_llm(prompt, system_prompt, api_key=api_key, model=model)
+    return {
+        "text": result.text,
+        "provider": result.provider,
+        "model": result.model,
+        "success": result.success,
+        "error": result.error,
+    }
+
+
 @app.get("/api/llm/key")
 async def llm_key_status():
     """Report the active NVIDIA API key (masked) and whether it is custom."""

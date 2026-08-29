@@ -1,5 +1,20 @@
 export const MODULES = [
   {
+    id: 'simulator',
+    name: 'Simulator',
+    icon: '🧪',
+    description: 'Visual execution of all six simulation scenarios with live Chart.js charts.',
+    path: '/dashboard/simulator',
+    apiEndpoint: '/dynamics/simulate',
+    testPayload: {
+      start: [0, 0, 0],
+      initial_velocity: [1, 0, 0],
+      force_law: 'inertial',
+      dt: 0.01,
+      t_max: 10,
+    },
+  },
+  {
     id: 'ghost-resolver',
     name: 'Ghost Resolver',
     icon: '🔮',

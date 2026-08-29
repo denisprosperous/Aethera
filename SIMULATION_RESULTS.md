@@ -1,6 +1,6 @@
 # AETHERA v25.0 — Simulation Results
 
-- Generated: 2026-08-29T13:09:43.423232+00:00
+- Generated: 2026-08-29T13:12:15.241785+00:00
 - Target API: `https://aethera.vercel.app`
 - Verdict: **0/6 scenarios passed**
 

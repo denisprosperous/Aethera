@@ -15,6 +15,9 @@ eggs/
 .eggs/
 lib/
 lib64/
+# AETHERA: keep Next.js shared lib tracked (the bare `lib/` rule above
+# silently ignored web/src/lib/api.ts — see v26.0 CI fix)
+!web/src/lib/
 parts/
 sdist/
 var/

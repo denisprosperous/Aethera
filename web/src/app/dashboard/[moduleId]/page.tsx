@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { MODULES } from '@/components/ModuleConfig';
 import { ChevronLeft, Loader2, AlertCircle } from 'lucide-react';
 import LLMPalette from '@/components/LLMPalette';
-import { apiUrl } from '@/lib/api';
+import { apiFetch } from '@/lib/api';
 
 export default function ModulePage() {
   const params = useParams();
@@ -27,7 +27,7 @@ export default function ModulePage() {
     
     try {
       const isPost = !!module.testPayload;
-      const res = await fetch(apiUrl(`/api${module.apiEndpoint}`), {
+      const res = await apiFetch(`/api${module.apiEndpoint}`, {
         method: isPost ? 'POST' : 'GET',
         headers: { 'Content-Type': 'application/json' },
         body: isPost ? JSON.stringify(module.testPayload) : undefined,

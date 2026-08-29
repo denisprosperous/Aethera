@@ -3,6 +3,10 @@
 
 FROM rust:1.97-slim AS rust-builder
 WORKDIR /app/rust
+# gmp-mpfr-sys builds vendored GMP/MPFR from source — needs m4, make, gcc.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    m4 make gcc libc6-dev && \
+    rm -rf /var/lib/apt/lists/*
 COPY rust/ ./rust/
 RUN cd rust && cargo build -p aethera-ffi --release
 

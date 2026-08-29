@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { MODULES } from '@/components/ModuleConfig';
 import { ChevronLeft, Loader2, AlertCircle } from 'lucide-react';
+import LLMPalette from '@/components/LLMPalette';
 
 export default function ModulePage() {
   const params = useParams();
@@ -251,6 +252,8 @@ export default function ModulePage() {
           </div>
         )}
       </main>
+
+      <LLMPalette />
     </div>
   );
 }

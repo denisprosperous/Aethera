@@ -1,0 +1,74 @@
+name: ETOPO1 Global Ingestion
+
+# Phase 1 — real-data ingestion pipeline. Runs weekly and on demand.
+# Requires repository secret DATABASE_URL (Neon Postgres connection string).
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Data source"
+        required: false
+        default: etopo1
+        type: choice
+        options: [etopo1, synthetic]
+      commit:
+        description: "Persist to database"
+        required: false
+        default: "true"
+        type: boolean
+  schedule:
+    - cron: "0 6 1 * *" # monthly refresh, 06:00 UTC
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ingest-etopo1
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install numpy scipy requests psycopg2-binary netCDF4
+
+      - name: Ingest ETOPO1 (real DEM, 1 arc-minute)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python scripts/download_etopo1.py --data-dir data --retries 3 || true
+          cd python
+          python -m aethera.ingest.ingest_global_etopo1 \
+            --all \
+            --source ${{ inputs.source || 'etopo1' }} \
+            ${{ (inputs.commit == 'false' && '') || '--commit' }}
+
+      - name: Verify ingestion (region count + zero-area check)
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python scripts/verify_ingestion.py | tee INGESTION_STATUS.md
+
+      - name: Commit ingestion status
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f INGESTION_STATUS.md ] && [ -s INGESTION_STATUS.md ]; then
+            git add INGESTION_STATUS.md
+            git diff --cached --quiet || git commit -m "phase1: ETOPO1 ingestion status update [skip ci]"
+            git push
+          fi

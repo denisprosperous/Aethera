@@ -1,0 +1,51 @@
+name: End-to-End Simulations
+
+# Phase 3 — runs the six master-prompt simulation scenarios against a live
+# deployment and commits SIMULATION_RESULTS.md. Runs on every push to main
+# (against production) and can be pointed at any URL via workflow_dispatch.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: "Target API base URL"
+        required: false
+        default: "https://aethera.vercel.app"
+
+permissions:
+  contents: write
+
+jobs:
+  simulations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run simulation suite
+        id: sims
+        continue-on-error: true
+        env:
+          API_BASE: ${{ inputs.api_base || 'https://aethera.vercel.app' }}
+        run: |
+          python scripts/run_simulations.py
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add SIMULATION_RESULTS.md
+          git diff --cached --quiet || git commit -m "phase3: simulation results update [skip ci]"
+          git push
+
+      - name: Fail on scenario failures
+        if: steps.sims.outcome == 'failure'
+        run: |
+          echo "One or more simulation scenarios failed — see SIMULATION_RESULTS.md"
+          exit 1

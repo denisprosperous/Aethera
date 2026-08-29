@@ -1,12 +1,21 @@
 "use client";
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { MODULES } from '@/components/ModuleConfig';
+import LLMPalette from '@/components/LLMPalette';
 
 export default function Dashboard() {
   const router = useRouter();
   const [selectedModule, setSelectedModule] = useState<string | null>(null);
+  const [apiVersion, setApiVersion] = useState<string>('…');
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then((d) => setApiVersion(d?.platform || `v${d?.version}` || 'online'))
+      .catch(() => setApiVersion('offline'));
+  }, []);
 
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', background: '#000' }}>
@@ -118,17 +127,21 @@ export default function Dashboard() {
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontFamily: 'monospace', fontSize: '12px', color: '#666' }}>v0.2.0</span>
+                <span style={{ fontFamily: 'monospace', fontSize: '12px', color: '#666' }}>v25.0</span>
               </div>
             </div>
             <div style={{ display: 'flex', gap: '16px', fontFamily: 'monospace', fontSize: '11px', color: '#444' }}>
-              <span>Backend: http://localhost:8765</span>
+              <span>Backend: same-origin serverless · {apiVersion}</span>
               <span>|</span>
               <span>Modules: {MODULES.length} operational</span>
+              <span>|</span>
+              <span>LLM: NVIDIA NIM (free)</span>
             </div>
           </div>
         </div>
       </main>
+
+      <LLMPalette />
     </div>
   );
 }

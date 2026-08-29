@@ -31,8 +31,8 @@ export default function ManifoldViewer({ vertices, edges, colors }: ManifoldView
         
         {/* Render edges as lines */}
         {edges.map((edge, i) => {
-          const start = vertices[edge[0]] || [0, 0, 0];
-          const end = vertices[edge[1]] || [0, 0, 0];
+          const start = (vertices[edge[0]] || [0, 0, 0]) as [number, number, number];
+          const end = (vertices[edge[1]] || [0, 0, 0]) as [number, number, number];
           return (
             <Line
               key={i}
@@ -45,7 +45,7 @@ export default function ManifoldViewer({ vertices, edges, colors }: ManifoldView
         
         {/* Render vertices as spheres */}
         {vertices.map((v, i) => (
-          <mesh key={i} position={v}>
+          <mesh key={i} position={v as [number, number, number]}>
             <sphereGeometry args={[0.15]} />
             <meshStandardMaterial color={colors?.[i] || '#a78bfa'} />
           </mesh>

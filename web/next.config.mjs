@@ -1,18 +1,27 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // In production: API is served by Vercel serverless functions (api/index.py)
-  // In development: proxy to localhost:8000
+  // Production: unmatched /api/* paths are rewritten to the FastAPI
+  // serverless function at web/api/index.py (afterFiles => Next.js
+  // filesystem routes such as src/app/api/llm/route.ts win first).
+  // Development: proxy to a local uvicorn on :8765.
   async rewrites() {
     if (process.env.NODE_ENV === 'production') {
-      return []; // API served by Vercel directly
+      return {
+        beforeFiles: [],
+        afterFiles: [
+          { source: '/api/:path*', destination: '/api/index' },
+        ],
+        fallback: [],
+      };
     }
-    return [
-      {
-        source: '/api/:path*',
-        destination: 'http://localhost:8765/api/v1/:path*',
-      },
-    ];
+    return {
+      beforeFiles: [],
+      afterFiles: [
+        { source: '/api/:path*', destination: 'http://localhost:8765/api/:path*' },
+      ],
+      fallback: [],
+    };
   },
 };
 export default nextConfig;

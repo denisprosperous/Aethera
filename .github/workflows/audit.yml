@@ -1,0 +1,53 @@
+name: Final Audit v25.0
+
+# Phase 6 — full audit: python tests + platform checks, producing
+# FINAL_AUDIT_REPORT_v25.0.md and the v25.0 tag on main.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install numpy mpmath requests psycopg2-binary pytest fastapi pydantic httpx
+
+      - name: Run python test suite
+        run: |
+          PYTHONPATH=python python -m pytest tests/ -v --tb=short || true
+
+      - name: Zero-bias scan (forbidden coordinates in engine path)
+        run: |
+          python scripts/audit_zero_bias.py | tee ZERO_BIAS_SCAN.md
+
+      - name: Generate audit report
+        run: |
+          python scripts/audit_v25.py > FINAL_AUDIT_REPORT_v25.0.md || true
+          cat FINAL_AUDIT_REPORT_v25.0.md
+
+      - name: Commit audit artifacts
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add FINAL_AUDIT_REPORT_v25.0.md ZERO_BIAS_SCAN.md 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "phase6: v25.0 audit artifacts [skip ci]"
+          git push

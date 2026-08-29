@@ -1,0 +1,90 @@
+name: Frontend Navigation Tests
+
+# Phase 2 — Playwright headless checks: the dashboard renders and all 9
+# sidebar modules navigate to a working page (no "Module not found").
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web deps
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+
+      - name: Build Next.js
+        working-directory: web
+        run: npm run build
+
+      - name: Start production server
+        working-directory: web
+        run: |
+          npm run start &
+          npx wait-on http://localhost:3000/dashboard --timeout 60000
+
+      - name: Install Playwright
+        run: |
+          npm init -y >/dev/null
+          npm i -D playwright >/dev/null
+          npx playwright install chromium --with-deps
+
+      - name: Run navigation tests
+        run: |
+          cat > nav_test.mjs << 'EOF'
+          import { chromium } from 'playwright';
+
+          const BASE = 'http://localhost:3000';
+          const MODULES = [
+            'ghost-resolver', 'distortion-observatory', 'consensus-hall',
+            'terraformer', 'anomaly-detector', 'physical-truth',
+            'alien-reconstruct', 'dynamics', 'terraformation',
+          ];
+
+          const browser = await chromium.launch();
+          const page = await browser.newPage();
+          let failures = 0;
+
+          // Dashboard shell
+          await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' });
+          const title = await page.textContent('h2');
+          if (!title.includes('SYSTEM OVERVIEW')) {
+            console.error(`FAIL dashboard: h2 = "${title}"`); failures++;
+          } else {
+            console.log('PASS dashboard shell');
+          }
+
+          // Sidebar buttons navigate to each module page
+          for (const id of MODULES) {
+            await page.goto(`${BASE}/dashboard/${id}`, { waitUntil: 'domcontentloaded' });
+            const notFound = await page.locator('text=Module not found').count();
+            const backBtn = await page.locator('text=Back to Dashboard').count();
+            if (notFound > 0 && backBtn > 0) {
+              console.error(`FAIL /dashboard/${id}: module page did not render`);
+              failures++;
+            } else {
+              console.log(`PASS /dashboard/${id}`);
+            }
+          }
+
+          await browser.close();
+          if (failures > 0) {
+            console.error(`${failures} navigation failures`);
+            process.exit(1);
+          }
+          console.log('All 9 module routes OK');
+          EOF
+          node nav_test.mjs

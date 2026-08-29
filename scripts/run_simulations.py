@@ -13,7 +13,7 @@ Scenarios:
   6. Celestial Dynamics    POST /api/dynamics/simulate   -> non-empty trajectory
 
 Usage:
-    API_BASE=https://aethera.vercel.app python scripts/run_simulations.py
+    API_BASE=https://aethera-lime.vercel.app python scripts/run_simulations.py
 """
 
 import json

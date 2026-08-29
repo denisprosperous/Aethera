@@ -12,7 +12,7 @@ on:
       api_base:
         description: "Target API base URL"
         required: false
-        default: "https://aethera.vercel.app"
+        default: "https://aethera-lime.vercel.app"
 
 permissions:
   contents: write
@@ -32,7 +32,7 @@ jobs:
         id: sims
         continue-on-error: true
         env:
-          API_BASE: ${{ inputs.api_base || 'https://aethera.vercel.app' }}
+          API_BASE: ${{ inputs.api_base || 'https://aethera-lime.vercel.app' }}
         run: |
           python scripts/run_simulations.py
 

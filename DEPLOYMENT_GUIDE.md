@@ -59,8 +59,8 @@ NEXT_PUBLIC_API_URL=https://aethera-backend.up.railway.app
 
 1. Click "Deploy"
 2. Wait for build (~1 minute)
-3. Copy the public URL (e.g., `https://aethera.vercel.app`)
-4. Verify: `https://aethera.vercel.app/dashboard`
+3. Copy the public URL (e.g., `https://aethera-lime.vercel.app`)
+4. Verify: `https://aethera-lime.vercel.app/dashboard`
 
 ---
 
@@ -191,7 +191,7 @@ python -c "from aethera.engine_ffi.bridge import load_rust_lib; print(load_rust_
 ## Success Criteria
 
 - [ ] Backend live on Railway: `https://aethera-backend.up.railway.app/api/health`
-- [ ] Frontend live on Vercel: `https://aethera.vercel.app/dashboard`
+- [ ] Frontend live on Vercel: `https://aethera-lime.vercel.app/dashboard`
 - [ ] Cloudflare Worker active (pinging every 10 min)
 - [ ] All 195+ countries ingested
 - [ ] Rust engine compiled and loaded

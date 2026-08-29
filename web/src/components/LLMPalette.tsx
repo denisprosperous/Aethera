@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { apiUrl } from '@/lib/api';
 
 /**
  * AETHERA AI Palette (v25.0) — global Ctrl+K / ⌘K overlay.
@@ -64,7 +65,7 @@ export default function LLMPalette() {
   useEffect(() => {
     setSavedKey(getUserNvidiaKey());
     if (open) {
-      fetch('/api/llm')
+      fetch(apiUrl('/api/llm'))
         .then((r) => r.json())
         .then((d) => setStatus(d))
         .catch(() => setStatus(null));
@@ -83,7 +84,7 @@ export default function LLMPalette() {
     setAnswer('');
     setMeta(null);
     try {
-      const res = await fetch('/api/llm', {
+      const res = await fetch(apiUrl('/api/llm'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -125,7 +126,7 @@ export default function LLMPalette() {
     }
     // Best-effort server-side rotation (ignored if unreachable).
     try {
-      await fetch('/api/llm/key', {
+      await fetch(apiUrl('/api/llm/key'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ api_key: k }),
@@ -143,7 +144,7 @@ export default function LLMPalette() {
     setSavedKey('');
     setSettingsMsg('Reverted to the built-in platform key.');
     try {
-      await fetch('/api/llm/key', {
+      await fetch(apiUrl('/api/llm/key'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reset: true }),

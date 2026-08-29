@@ -50,7 +50,7 @@ app = FastAPI(
     title="AETHERA API",
     description="First objective geometric substrate. No pre-computed areas — "
                 "all areas derived from raw edge lengths + global closure.",
-    version="0.25.0",
+    version="0.26.0",
 )
 
 app.add_middleware(
@@ -59,6 +59,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---- Deployment-mode detection (v26.0 Railway-aware) -------------------
+# The platform runs identically in two modes:
+#   RAILWAY  — served by the Railway backend (RAILWAY_* env present).
+#   VERCEL   — same-origin serverless function on Vercel (VERCEL_ENV set).
+#   LOCAL    — bare uvicorn run (development).
+
+RAILWAY_ENABLED = bool(os.environ.get('RAILWAY_PUBLIC_DOMAIN') or os.environ.get('RAILWAY_PROJECT_ID'))
+VERCEL_ENABLED = bool(os.environ.get('VERCEL_ENV') or os.environ.get('VERCEL'))
+
+if RAILWAY_ENABLED:
+    DEPLOYMENT_MODE = 'railway'
+    API_BASE = os.environ.get('RAILWAY_PUBLIC_URL', 'https://aethera-backend.up.railway.app')
+    print(f"🌐 AETHERA deployment mode: Railway ({API_BASE})", flush=True)
+elif VERCEL_ENABLED:
+    DEPLOYMENT_MODE = 'vercel-serverless'
+    API_BASE = ''  # same-origin relative /api/*
+    print("🖥️ AETHERA deployment mode: Vercel serverless (same-origin)", flush=True)
+else:
+    DEPLOYMENT_MODE = 'local'
+    API_BASE = ''
+    print("🧪 AETHERA deployment mode: local development", flush=True)
 
 
 # ---- Pydantic models --------------------------------------------------
@@ -191,12 +214,13 @@ def _fetch_edges_from_db(region: str = None) -> tuple[EdgeGraph, str]:
 
 @app.get("/api/health")
 async def health():
-    """Health check — reports solver and LLM status."""
+    """Health check — reports solver, LLM and deployment mode status."""
     from aethera.llm import llm_status
     return {
         "status": "ok",
-        "version": "0.25.0",
-        "platform": "AETHERA v25.0",
+        "version": "0.26.0",
+        "platform": "AETHERA v26.0",
+        "mode": DEPLOYMENT_MODE,
         "database": "connected",
         "solver": "rust" if is_rust_available() else "python_fallback",
         "llm": llm_status(),

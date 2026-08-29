@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { MODULES } from '@/components/ModuleConfig';
 import LLMPalette from '@/components/LLMPalette';
+import { apiUrl, API_MODE } from '@/lib/api';
 
 export default function Dashboard() {
   const router = useRouter();
@@ -11,9 +12,9 @@ export default function Dashboard() {
   const [apiVersion, setApiVersion] = useState<string>('…');
 
   useEffect(() => {
-    fetch('/api/health')
+    fetch(apiUrl('/api/health'))
       .then((r) => r.json())
-      .then((d) => setApiVersion(d?.platform || `v${d?.version}` || 'online'))
+      .then((d) => setApiVersion(`${d?.platform || `v${d?.version}` || 'online'} · ${d?.mode || API_MODE}`))
       .catch(() => setApiVersion('offline'));
   }, []);
 

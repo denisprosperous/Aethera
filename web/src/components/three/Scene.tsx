@@ -18,15 +18,20 @@ export const ACCENT = '#00ff88';
 export const DIM = '#1c2a38';
 export const GRID = 'rgba(0,255,136,0.08)';
 
-/** Diverging blue → dark → green → yellow → red color scale for heatmaps. */
+/**
+ * Diverging blue → dark → red scale for legacy-deviation heatmaps.
+ * Blue = under-expanded (legacy shrinks), red = over-expanded (legacy
+ * inflates). Pure blue↔red — no green in the path, so red always means
+ * "inflated" at any magnitude.
+ */
 export function heatColor(t: number): string {
   const clamped = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0.5));
   const stops: [number, [number, number, number]][] = [
     [0.0, [56, 130, 246]],   // blue — under-expanded
     [0.25, [6, 182, 212]],   // cyan
     [0.5, [13, 17, 23]],     // dark neutral
-    [0.75, [0, 255, 136]],   // green
-    [1.0, [249, 115, 22]],   // orange-red — over-expanded
+    [0.75, [249, 115, 34]],  // orange
+    [1.0, [255, 59, 59]],    // red — over-expanded
   ];
   for (let i = 0; i < stops.length - 1; i++) {
     const [t0, c0] = stops[i];
@@ -40,8 +45,24 @@ export function heatColor(t: number): string {
   return ACCENT;
 }
 
+/** Single-hue green ramp for true-area heatmaps (small → dark, large → neon). */
+export function areaColor(t: number): string {
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0));
+  const c0 = [13, 48, 36];   // deep green-black
+  const c1 = [0, 255, 136];  // neon accent
+  const c = c0.map((v, k) => Math.round(v + clamped * (c1[k] - v)));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
 export function heatColorHex(t: number): [number, number, number] {
   const m = heatColor(t).match(/\d+/g);
+  return m
+    ? [Number(m[0]) / 255, Number(m[1]) / 255, Number(m[2]) / 255]
+    : [0, 1, 0.53];
+}
+
+export function areaColorHex(t: number): [number, number, number] {
+  const m = areaColor(t).match(/\d+/g);
   return m
     ? [Number(m[0]) / 255, Number(m[1]) / 255, Number(m[2]) / 255]
     : [0, 1, 0.53];

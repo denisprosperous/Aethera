@@ -15,7 +15,7 @@ import { useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Line, Html } from '@react-three/drei';
-import { Scene, ACCENT, heatColorHex, ViewportHud, Tip } from './Scene';
+import { Scene, ACCENT, heatColorHex, areaColorHex, ViewportHud, Tip } from './Scene';
 import { delaunay, uniqueEdges, fitTransform, type Pt } from '@/lib/delaunay';
 
 export interface ManifoldRegion {
@@ -121,6 +121,10 @@ export default function Manifold3D({
 }: Manifold3DProps) {
   const [hover, setHover] = useState<{ name: string; area: number; position: [number, number, number] } | null>(null);
 
+  // Legacy mode (heatValues supplied) uses the blue↔red deviation scale;
+  // true-area mode uses the single-hue green ramp.
+  const colorFn = heatValues ? heatColorHex : areaColorHex;
+
   const model = useMemo(() => {
     const valid = regions.filter(
       (r) => r.coords?.length >= 2 && Number.isFinite(r.coords[0]) && Number.isFinite(r.coords[1]),
@@ -153,6 +157,7 @@ export default function Manifold3D({
     }));
 
     const tris = delaunay(pts);
+    const colorAt = (idx: number) => colorFn(nodes[idx].heat ?? 0.5);
     const edges = uniqueEdges(tris).map(
       ([a, b]) =>
         [
@@ -168,7 +173,7 @@ export default function Manifold3D({
       for (const [a, b, c] of tris) {
         for (const idx of [a, b, c]) {
           verts.push(positions[idx].x, positions[idx].y, positions[idx].z);
-          const col = heatColorHex(nodes[idx].heat ?? 0.5);
+          const col = colorAt(idx);
           cols.push(col[0], col[1], col[2]);
         }
       }
@@ -179,6 +184,7 @@ export default function Manifold3D({
     })();
 
     return { nodes, edges, triGeom };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regions, heatValues]);
 
   if (!model) {
@@ -219,7 +225,7 @@ export default function Manifold3D({
           <Node
             key={`${n.name}-${i}`}
             position={n.position}
-            color={heatColorHex(n.heat ?? 0.5)}
+            color={colorFn(n.heat ?? 0.5)}
             name={n.name}
             area={n.area}
             onClick={() => onRegionClick?.(n.name)}

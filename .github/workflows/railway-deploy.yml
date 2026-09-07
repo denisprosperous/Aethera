@@ -1,0 +1,60 @@
+name: Railway Backend Deploy
+
+# AETHERA v31.1 — push-to-deploy pipeline for the Railway backend.
+#
+# This is the repo-side "integration": every push to main (or a manual
+# dispatch) ships the backend to the aethera-backend service via the
+# official Railway CLI. It requires the repo secret RAILWAY_TOKEN and an
+# ACTIVE Railway workspace.
+#
+# STATUS 2026-09-07: the Railway workspace trial EXPIRED — the token is
+# rejected ("Unauthorized") and the service 404s. Runs will fail with
+# "trial expired" until the account owner reactivates a plan. No code
+# path can bypass a billing suspension; this workflow exists so that
+# revival is zero-touch: owner reactivates → next push deploys.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "python/**"
+      - "Dockerfile"
+      - "railway.json"
+      - ".github/workflows/railway-deploy.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@latest
+
+      - name: Deploy backend to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway status \
+            --project 2e5a06f9-dee2-417e-8d79-af8df3c45d90 \
+            --environment DATABASE_URL
+          railway up \
+            --project 2e5a06f9-dee2-417e-8d79-af8df3c45d90 \
+            --environment DATABASE_URL \
+            --service aethera-backend \
+            --ci
+
+      - name: Wait for health
+        run: |
+          for i in $(seq 1 40); do
+            code=$(curl -s -o /tmp/h.json -w "%{http_code}" --max-time 10 \
+              https://aethera-backend.up.railway.app/api/health || true)
+            if [ "$code" = "200" ]; then
+              echo "healthy: $(cat /tmp/h.json)"; exit 0
+            fi
+            echo "attempt $i → HTTP $code; retrying in 15s"; sleep 15
+          done
+          echo "::warning::backend not healthy 10 min after deploy"
+          exit 1

@@ -13,6 +13,7 @@
 
 import { useMemo, useState } from 'react';
 import * as THREE from 'three';
+import { useFrame, useThree } from '@react-three/fiber';
 import { Line, Html } from '@react-three/drei';
 import { Scene, ACCENT, heatColorHex, ViewportHud, Tip } from './Scene';
 import { delaunay, uniqueEdges, fitTransform, type Pt } from '@/lib/delaunay';
@@ -35,9 +36,31 @@ interface Manifold3DProps {
   /** Labels for named regions (rendered as floating text). */
   labels?: Record<string, string> | null;
   showMesh?: boolean;
+  viewPreset?: 'orbit' | 'planar';
+  autoRotate?: boolean;
 }
 
 const EXTENT = 12;
+
+/**
+ * Camera rig — imperatively moves the camera when the caller toggles
+ * between the free 3D orbit and the top-down 2D planar inspection view.
+ */
+function CameraRig({ preset }: { preset: 'orbit' | 'planar' }) {
+  const { camera } = useThree();
+  useFrame(() => {
+    const targetPos =
+      preset === 'planar'
+        ? new THREE.Vector3(0, EXTENT * 2.6, 0.42)
+        : new THREE.Vector3(EXTENT * 1.05, EXTENT * 1.0, EXTENT * 1.45);
+    const dist = camera.position.distanceTo(targetPos);
+    if (dist > 0.05) {
+      camera.position.lerp(targetPos, 0.12);
+      camera.lookAt(0, 0, 0);
+    }
+  });
+  return null;
+}
 
 function Node({
   position,
@@ -93,6 +116,8 @@ export default function Manifold3D({
   onRegionClick,
   labels = null,
   showMesh = true,
+  viewPreset = 'orbit',
+  autoRotate = false,
 }: Manifold3DProps) {
   const [hover, setHover] = useState<{ name: string; area: number; position: [number, number, number] } | null>(null);
 
@@ -171,7 +196,8 @@ export default function Manifold3D({
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <Scene camera={[EXTENT * 1.05, EXTENT * 1.0, EXTENT * 1.45]}>
+      <Scene camera={[EXTENT * 1.05, EXTENT * 1.0, EXTENT * 1.45]} autoRotate={autoRotate}>
+        <CameraRig preset={viewPreset} />
         <gridHelper args={[EXTENT * 2.9, 26, '#0f2436', '#0a1826']} />
         {showMesh && (
           <mesh geometry={model.triGeom}>

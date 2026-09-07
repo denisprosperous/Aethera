@@ -1,5 +1,23 @@
 export const MODULES = [
   {
+    id: 'earth-3d',
+    name: '3D Earth Simulation',
+    icon: '🌍',
+    description: 'View the intrinsic manifold as a 3D object — derived from absolute scalar data, not a pre-seeded globe. Intrinsic ↔ area-preserving modes, heatmaps, OrbitControls.',
+    path: '/dashboard/earth-3d',
+    apiEndpoint: '/solve/physical-truth',
+    testPayload: null,
+  },
+  {
+    id: 'truth-portal',
+    name: 'Truth Portal',
+    icon: '⚖️',
+    description: 'Arbitration, signed Truth Certificates and the Global Truth Index — every verdict computed from absolute scalar inputs and HMAC-signed.',
+    path: '/dashboard/truth',
+    apiEndpoint: '/truth-index',
+    testPayload: null,
+  },
+  {
     id: 'simulator-3d',
     name: 'Simulator 3D',
     icon: '🧊',

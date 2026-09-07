@@ -1,5 +1,29 @@
 export const MODULES = [
   {
+    id: 'simulator-3d',
+    name: 'Simulator 3D',
+    icon: '🧊',
+    description: '3D-first simulation experience — all six scenarios as interactive Three.js scenes with real-time parameter tuning.',
+    path: '/dashboard/simulator3d',
+    apiEndpoint: '/dynamics/simulate',
+    testPayload: {
+      start: [0, 0, 0],
+      initial_velocity: [1, 0, 0],
+      force_law: 'inertial',
+      dt: 0.01,
+      t_max: 10,
+    },
+  },
+  {
+    id: 'true-globe',
+    name: 'True-Area Globe',
+    icon: '🌍',
+    description: 'The globe without assumptions — the emergent Physical Truth manifold in 3D with true-area and legacy-deviation heatmaps.',
+    path: '/dashboard/globe',
+    apiEndpoint: '/solve/physical-truth',
+    testPayload: null,
+  },
+  {
     id: 'simulator',
     name: 'Simulator',
     icon: '🧪',

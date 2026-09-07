@@ -45,6 +45,7 @@ export interface ScenarioParams {
   projection: ProjectionType;
   // alien
   alienSample: string;
+  alienCustomEdges: { source: string; target: string; length: number; source_type: string }[] | null;
   // ghost
   ghostCustom: unknown | null;
 }
@@ -60,6 +61,7 @@ export const DEFAULT_PARAMS: ScenarioParams = {
   seaLevel: 10,
   projection: 'Mercator',
   alienSample: ALIEN_SAMPLES[0].id,
+  alienCustomEdges: null,
   ghostCustom: null,
 };
 
@@ -218,7 +220,10 @@ export async function runScenario(
   }
 
   if (sc === 'alien') {
-    const sample = ALIEN_SAMPLES.find((s) => s.id === p.alienSample) || ALIEN_SAMPLES[0];
+    const custom = p.alienSample === 'custom' && p.alienCustomEdges && p.alienCustomEdges.length >= 3
+      ? { id: 'custom', label: 'Uploaded CSV', edges: p.alienCustomEdges }
+      : null;
+    const sample = custom || ALIEN_SAMPLES.find((s) => s.id === p.alienSample) || ALIEN_SAMPLES[0];
     const j = await fetchJson('/api/alien/reconstruct', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

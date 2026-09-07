@@ -14,9 +14,19 @@
 // same request against the same-origin serverless function. The platform
 // therefore works identically whether Railway is up, down, or unconfigured.
 
-const RAILWAY_URL = (process.env.NEXT_PUBLIC_RAILWAY_URL || '').replace(/\/+$/, '');
+// v31.1 env contract: NEXT_PUBLIC_API_URL is the canonical public var,
+// NEXT_PUBLIC_RAILWAY_URL remains accepted as a legacy alias, and
+// NEXT_PUBLIC_RAILWAY_ENABLED=false explicitly disables Railway mode.
+const RAILWAY_URL = (
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_RAILWAY_URL ||
+  ''
+).replace(/\/+$/, '');
 
-export const RAILWAY_ENABLED = RAILWAY_URL.length > 0;
+const ENABLED_FLAG = (process.env.NEXT_PUBLIC_RAILWAY_ENABLED || '').trim().toLowerCase();
+
+export const RAILWAY_ENABLED =
+  ENABLED_FLAG === 'false' ? false : RAILWAY_URL.length > 0;
 
 export const API_MODE = RAILWAY_ENABLED ? 'railway' : 'vercel-serverless';
 

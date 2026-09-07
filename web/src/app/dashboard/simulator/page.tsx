@@ -2,9 +2,29 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
+import { useRouter } from 'next/navigation';
 import Chart from 'chart.js/auto';
 import LLMPalette from '@/components/LLMPalette';
 import { apiFetch } from '@/lib/api';
+import { GHOST_PAYLOAD } from '@/lib/samples';
+
+const Simulator3DView = dynamic(
+  () => import('@/components/three/Simulator3DView'),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        style={{
+          width: '100%', height: '100%', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', color: '#00ff88', fontFamily: 'monospace', fontSize: 12,
+        }}
+      >
+        ◌ initialising 3D viewport…
+      </div>
+    ),
+  },
+);
 
 /**
  * AETHERA Simulator (v26.1) — visual front-end for all six simulation
@@ -47,6 +67,9 @@ export default function SimulatorPage() {
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [stats, setStats] = useState<{ label: string; value: string; accent?: boolean }[]>([]);
+  const [viewMode, setViewMode] = useState<'3d' | '2d'>('3d');
+  const [data, setData] = useState<Record<string, unknown> | null>(null);
+  const router = useRouter();
 
   // dynamics controls
   const [forceLaw, setForceLaw] = useState<(typeof FORCES)[number]>('inertial');
@@ -135,6 +158,7 @@ export default function SimulatorPage() {
           }),
         })).json();
         if (j.detail) throw new Error(typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail));
+        setData(j);
         const traj: number[][] = j.trajectory || [];
         cfg = makeLineCfg(
           traj.map((_, i) => i),
@@ -156,6 +180,7 @@ export default function SimulatorPage() {
           body: JSON.stringify({ sea_level_rise_m: seaLevel }),
         })).json();
         if (j.detail) throw new Error(typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail));
+        setData(j);
         const cc: any[] = j.coastline_changes || [];
         const worst = [...cc].sort((a, b) => a.area_change_km2 - b.area_change_km2).slice(0, 15);
         cfg = makeBarCfg(
@@ -173,6 +198,7 @@ export default function SimulatorPage() {
         ]);
       } else if (sc === 'projections') {
         const j = await (await apiFetch('/api/projections/scores')).json();
+        setData(j);
         const scores: any[] = j.scores || [];
         cfg = makeBarCfg(
           scores.map((s) => s.projection),
@@ -187,6 +213,8 @@ export default function SimulatorPage() {
         })));
       } else if (sc === 'physical-truth') {
         const j = await (await apiFetch('/api/solve/physical-truth')).json();
+        if (j.detail) throw new Error(typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail));
+        setData(j);
         const regions: any[] = j.regions || [];
         cfg = makeScatterCfg(regions.map((r) => ({ x: r.coords[0], y: r.coords[1], label: r.name })));
         setNote(j.note || '');
@@ -211,6 +239,7 @@ export default function SimulatorPage() {
           }),
         })).json();
         if (j.detail) throw new Error(typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail));
+        setData(j);
         setNote(j.note || '');
         cfg = makeBarCfg(
           ['Flat', 'Ellipsoidal', 'Potato'],
@@ -237,6 +266,7 @@ export default function SimulatorPage() {
           }),
         })).json();
         if (j.detail) throw new Error(typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail));
+        setData({ ...j, payload: GHOST_PAYLOAD });
         const areas = j.resolved_areas || {};
         const names = Object.keys(areas);
         cfg = makeBarCfg(names, names.map((n) => areas[n]), '#06b6d4', true);
@@ -260,7 +290,7 @@ export default function SimulatorPage() {
   }, [forceLaw, vx, vy, tMax, seaLevel]);
 
   // auto-run on load + on scenario switch
-  useEffect(() => { run(scenario); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [scenario]);
+  useEffect(() => { setData(null); run(scenario); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [scenario]);
   useEffect(() => () => destroyChart(), []);
 
   const active = SCENARIOS.find((s) => s.id === scenario)!;
@@ -363,7 +393,44 @@ export default function SimulatorPage() {
         }}>⚠ {error}</div>
       )}
 
-      {/* chart */}
+      {/* view toggle */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', alignItems: 'center' }}>
+        <span style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '10px', letterSpacing: '1px' }}>VIEW</span>
+        {([['3d', '🧊 3D Scene'], ['2d', '📈 2D Chart']] as const).map(([m, label]) => (
+          <button key={m} onClick={() => setViewMode(m)} style={{
+            background: viewMode === m ? 'rgba(0,255,136,0.12)' : '#0d1117',
+            border: `1px solid ${viewMode === m ? '#00ff88' : '#1c2a38'}`,
+            color: viewMode === m ? '#00ff88' : '#8b9bab',
+            borderRadius: '6px', padding: '6px 14px', cursor: 'pointer',
+            fontFamily: 'monospace', fontSize: '11px',
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {/* chart / 3D viewport */}
+      {viewMode === '3d' ? (
+        <div style={{
+          background: '#040a10', border: '1px solid #1c2a38', borderRadius: '10px',
+          height: '540px', position: 'relative', marginBottom: '16px', overflow: 'hidden',
+        }}>
+          {loading && (
+            <div style={{
+              position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'rgba(0,0,0,0.55)', zIndex: 9, borderRadius: '10px',
+              color: '#06b6d4', fontFamily: 'monospace', fontSize: '13px', letterSpacing: '1px',
+            }}>deriving…</div>
+          )}
+          <Simulator3DView
+            scenario={scenario}
+            data={data}
+            seaLevel={seaLevel}
+            forceLaw={forceLaw}
+            dt={0.1}
+            tMax={tMax}
+            onRegionClick={(r) => router.push(`/dashboard/physical-truth?region=${encodeURIComponent(r)}`)}
+          />
+        </div>
+      ) : (
       <div style={{
         background: '#0d1117', border: '1px solid #1c2a38', borderRadius: '10px',
         padding: '18px', height: '420px', position: 'relative', marginBottom: '16px',
@@ -377,6 +444,7 @@ export default function SimulatorPage() {
         )}
         <canvas ref={canvasRef} />
       </div>
+      )}
 
       {/* stats */}
       {stats.length > 0 && (

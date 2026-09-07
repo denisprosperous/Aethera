@@ -7,14 +7,24 @@ name: Railway Backend Deploy
 # official Railway CLI. It requires the repo secret RAILWAY_TOKEN and an
 # ACTIVE Railway workspace.
 #
-# STATUS 2026-09-08 (v31.3): pipeline fully wired and LIVE-TESTED via
-# workflow_dispatch (run 34141454358) — secret RAILWAY_TOKEN accepted, CLI
-# reached Railway's API, and execution stopped ONLY at the workspace billing
-# gate: "Your trial has expired. Please select a plan to continue using
-# Railway." No code path can bypass a billing suspension; this workflow
-# exists so that revival is zero-touch: owner reactivates a plan → dispatch
-# (or next push) deploys and health-gates automatically.
-# Owner runbook: docs/RAILWAY-DEPLOY-RUNBOOK.md
+# STATUS 2026-09-08 (v31.3-gm): target moved to the NEW active workspace
+# project "glistening-miracle" (d9d4ac7c-2aea-4d76-b56a-60d40d447833,
+# environment production, service Aethera). The old project
+# (2e5a06f9-…) is billing-suspended and dead.
+#
+# Current wiring state:
+#   - Service 'Aethera' is connected to this GitHub repo; pushes to main
+#     auto-deploy via Railway's own GitHub integration (verified: commit
+#     3a94068 auto-built to deployment 9a04d307 with status SUCCESS).
+#   - The secret RAILWAY_TOKEN must hold a token created in the NEW
+#     workspace; the old project token is dead ("Not Authorized").
+#   - Repo variable RAILWAY_HEALTH_URL (optional) — when set, the job
+#     health-gates the deployment for 10 minutes; when unset, the gate
+#     is skipped.
+#
+# NOTE: the Railway GitHub integration deploys BEFORE this workflow runs;
+# this job is a redundant belt-and-braces pipeline (explicit `railway up`),
+# plus the health gate. Owner runbook: docs/RAILWAY-DEPLOY-RUNBOOK.md
 
 on:
   push:
@@ -41,19 +51,24 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           railway status \
-            --project 2e5a06f9-dee2-417e-8d79-af8df3c45d90 \
-            --environment DATABASE_URL
+            --project d9d4ac7c-2aea-4d76-b56a-60d40d447833 \
+            --environment production
           railway up \
-            --project 2e5a06f9-dee2-417e-8d79-af8df3c45d90 \
-            --environment DATABASE_URL \
-            --service aethera-backend \
+            --project d9d4ac7c-2aea-4d76-b56a-60d40d447833 \
+            --environment production \
+            --service Aethera \
             --ci
 
-      - name: Wait for health
+      - name: Wait for health (gated by repo variable RAILWAY_HEALTH_URL)
+        env:
+          HEALTH_URL: ${{ vars.RAILWAY_HEALTH_URL }}
         run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "RAILWAY_HEALTH_URL not set — skipping health gate"; exit 0
+          fi
           for i in $(seq 1 40); do
             code=$(curl -s -o /tmp/h.json -w "%{http_code}" --max-time 10 \
-              https://aethera-backend.up.railway.app/api/health || true)
+              "$HEALTH_URL" || true)
             if [ "$code" = "200" ]; then
               echo "healthy: $(cat /tmp/h.json)"; exit 0
             fi

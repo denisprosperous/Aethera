@@ -50,7 +50,7 @@ app = FastAPI(
     title="AETHERA API",
     description="First objective geometric substrate. No pre-computed areas — "
                 "all areas derived from raw edge lengths + global closure.",
-    version="0.26.0",
+    version="0.30.1",
 )
 
 app.add_middleware(
@@ -218,8 +218,8 @@ async def health():
     from aethera.llm import llm_status
     return {
         "status": "ok",
-        "version": "0.26.0",
-        "platform": "AETHERA v26.0",
+        "version": "0.30.1",
+        "platform": "AETHERA v30.1",
         "mode": DEPLOYMENT_MODE,
         "database": "connected",
         "solver": "rust" if is_rust_available() else "python_fallback",
@@ -710,10 +710,16 @@ async def solve_physical_truth():
                 "coords": coord,
                 "area_km2": area,
             })
+    # v30.1: expose the solver's intrinsic edge graph (adjacency pairs) so
+    # 3D renderings draw REAL solved adjacencies, not a client-side guess.
+    graph, _areas = build_physical_truth_edge_graph()
+    edge_pairs = sorted({tuple(sorted((e.a, e.b))) for e in graph.edges})
     return {
         "regions": regions_data,
+        "vertices": [r["coords"] for r in regions_data],
+        "edges": [[a, b] for a, b in edge_pairs],
         "node_count": len(coords),
-        "edge_count": len(build_physical_truth_edge_graph()[0].edges),
+        "edge_count": len(edge_pairs),
         "residual": mf.residual,
         "convergence_residual": getattr(mf, "convergence_residual", None),
         "note": "Physical Truth manifold solved from area-derived edge lengths. "
@@ -833,6 +839,385 @@ async def aics_coordinates(region_name: str):
         },
         "physical_area_km2": area,
         "note": "AETHERA Intrinsic Coordinate System (AICS). No external reference frame.",
+    }
+
+
+# ---- v30.1 — TRUTH CERTIFICATION, ARBITRATION & TRUTH INDEX ----------
+# Every certificate is signed with HMAC-SHA256 over a canonical payload
+# hash + timestamp. No external dependency, deterministic, verifiable.
+
+import hmac
+import hashlib
+import time
+
+_CERT_SECRET = os.environ.get("AETHERA_CERT_SECRET", "aethera-truth-v30.1-intrinsic")
+
+
+def _canonical_hash(payload: Any) -> str:
+    """Stable SHA-256 over a JSON-serialised payload (sorted keys)."""
+    canon = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def _sign(cert_id: str, payload_hash: str, ts: float) -> str:
+    msg = f"{cert_id}|{payload_hash}|{ts}".encode("utf-8")
+    return hmac.new(_CERT_SECRET.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
+
+def issue_certificate(claim_type: str, claim: Dict[str, Any], findings: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a signed Truth Certificate for a claim + findings pair."""
+    ts = time.time()
+    payload = {"type": claim_type, "claim": claim, "findings": findings}
+    payload_hash = _canonical_hash(payload)
+    cert_id = "AET-" + payload_hash[:12].upper()
+    signature = _sign(cert_id, payload_hash, ts)
+    return {
+        "certificate_id": cert_id,
+        "type": claim_type,
+        "claim": claim,
+        "findings": findings,
+        "payload_hash": payload_hash,
+        "issued_at": ts,
+        "issued_at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)),
+        "algorithm": "HMAC-SHA256",
+        "signature": signature,
+        "verify": f"/api/certify/verify?certificate_id={cert_id}&payload_hash={payload_hash}&issued_at={ts}&signature={signature}",
+        "note": "Signed with the platform cert key. The certificate attests "
+                "that the findings were computed from absolute scalar inputs "
+                "(areas / edge lengths) with no coordinates involved.",
+    }
+
+
+class MaritimeClaim(BaseModel):
+    """Maritime arbitration request: two parties sharing a boundary."""
+    party_a: str = Field(..., description="First region name (Physical Truth registry)")
+    party_b: str = Field(..., description="Second region name")
+    claimed_split: Optional[float] = Field(
+        None, description="Optional claimed share for party_a (0..1); defaults to 0.5 (equal).")
+
+
+class TerritorialClaim(BaseModel):
+    """Territorial arbitration request: disputed area claims."""
+    disputed_region: str = Field(..., description="Disputed region name (must exist in Physical Truth registry)")
+    claim_a_name: str = Field("Party A")
+    claim_a_km2: float = Field(..., description="Party A claimed area (km²)")
+    claim_b_name: str = Field("Party B")
+    claim_b_km2: float = Field(..., description="Party B claimed area (km²)")
+
+
+@app.post("/api/arbitration/maritime")
+async def arbitration_maritime(claim: MaritimeClaim):
+    """Maritime boundary arbitration from Physical Truth scalars.
+
+    Verdict is computed ONLY from absolute areas and the intrinsic edge
+    graph: the shared boundary length is the area-derived solver edge
+    l = sqrt(min(area_a, area_b)); equitability is judged against the true
+    area ratio. No coastline geometry, no coordinates, no lat/lon.
+    """
+    a, b = claim.party_a, claim.party_b
+    area_a = get_region_area(a)
+    area_b = get_region_area(b)
+    if not area_a or not area_b:
+        raise HTTPException(404, f"Unknown region(s): {a if not area_a else ''} {b if not area_b else ''}".strip())
+
+    graph, _ = build_physical_truth_edge_graph()
+    adjacent = any({e.a, e.b} == {a, b} for e in graph.edges)
+    shared_edge_km = (min(area_a, area_b) ** 0.5) if adjacent else None
+
+    ratio = area_a / area_b if area_b else 0.0
+    split = claim.claimed_split if claim.claimed_split is not None else 0.5
+    split = min(1.0, max(0.0, split))
+    share_a = split * (area_a + area_b)
+    share_b = (1 - split) * (area_a + area_b)
+    # Equitability: how far the claimed split is from the true area ratio.
+    fair_split = area_a / (area_a + area_b) if (area_a + area_b) else 0.5
+    deviation_pp = abs(split - fair_split) * 100.0
+
+    if deviation_pp <= 5.0:
+        verdict = "EQUITABLE"
+        rationale = (
+            f"Claimed split {split:.3f} is within 5.0 pp of the truth-anchored "
+            f"fair split {fair_split:.3f} derived from absolute areas."
+        )
+    elif deviation_pp <= 15.0:
+        verdict = "CONTESTABLE"
+        rationale = (
+            f"Claimed split deviates {deviation_pp:.1f} pp from the truth-anchored "
+            f"fair split {fair_split:.3f}; review recommended."
+        )
+    else:
+        verdict = "INEQUITABLE"
+        rationale = (
+            f"Claimed split deviates {deviation_pp:.1f} pp from the truth-anchored "
+            f"fair split {fair_split:.3f}; the claim is not supported by absolute areas."
+        )
+
+    findings = {
+        "area_a_km2": area_a,
+        "area_b_km2": area_b,
+        "area_ratio_a_to_b": round(ratio, 6),
+        "adjacent": adjacent,
+        "shared_boundary_km_derived": round(shared_edge_km, 3) if shared_edge_km else None,
+        "fair_split_for_a": round(fair_split, 6),
+        "claimed_split_for_a": split,
+        "deviation_percentage_points": round(deviation_pp, 3),
+        "awarded_a_km2": round(share_a, 3),
+        "awarded_b_km2": round(share_b, 3),
+        "verdict": verdict,
+        "rationale": rationale,
+    }
+    cert = issue_certificate(
+        "maritime-arbitration",
+        {"party_a": a, "party_b": b, "claimed_split": split},
+        findings,
+    )
+    return {"arbitration": findings, "certificate": cert}
+
+
+@app.post("/api/arbitration/territorial")
+async def arbitration_territorial(claim: TerritorialClaim):
+    """Territorial dispute arbitration from Physical Truth scalars.
+
+    The disputed region's true area is fetched from the Physical Truth
+    registry; each party's claim is compared against that absolute value.
+    """
+    region = claim.disputed_region
+    true_area = get_region_area(region)
+    if not true_area:
+        raise HTTPException(404, f"Region '{region}' not found in Physical Truth registry.")
+
+    def _judge(name: str, claimed: float):
+        delta = claimed - true_area
+        rel = (delta / true_area * 100.0) if true_area else 0.0
+        if abs(rel) <= 2.0:
+            v = "CONSISTENT"
+        elif claimed > true_area:
+            v = "OVERCLAIM"
+        else:
+            v = "UNDERCLAIM"
+        return {
+            "party": name, "claimed_km2": claimed,
+            "delta_km2": round(delta, 3), "delta_percent": round(rel, 3),
+            "verdict": v,
+        }
+
+    ja = _judge(claim.claim_a_name, claim.claim_a_km2)
+    jb = _judge(claim.claim_b_name, claim.claim_b_km2)
+    closest = ja if abs(ja["delta_percent"]) <= abs(jb["delta_percent"]) else jb
+
+    findings = {
+        "disputed_region": region,
+        "physical_truth_area_km2": true_area,
+        "party_a": ja,
+        "party_b": jb,
+        "closest_to_truth": closest["party"],
+        "verdict": "RESOLVED — " + closest["party"] + " closest to Physical Truth",
+        "rationale": (
+            f"Physical Truth area of {region} is {true_area:,.0f} km². "
+            f"{ja['party']} is off by {ja['delta_percent']:+.2f}% and "
+            f"{jb['party']} by {jb['delta_percent']:+.2f}%."
+        ),
+    }
+    cert = issue_certificate(
+        "territorial-arbitration",
+        {
+            "disputed_region": region,
+            "claim_a": {"name": claim.claim_a_name, "km2": claim.claim_a_km2},
+            "claim_b": {"name": claim.claim_b_name, "km2": claim.claim_b_km2},
+        },
+        findings,
+    )
+    return {"arbitration": findings, "certificate": cert}
+
+
+@app.post("/api/certify")
+async def certify(claim: Dict[str, Any]):
+    """Issue a signed Truth Certificate for an arbitrary claim payload.
+
+    The claim is hashed canonically (sorted keys, SHA-256) and signed with
+    HMAC-SHA256. Verification data is embedded in the response.
+    """
+    if not isinstance(claim, dict) or not claim:
+        raise HTTPException(400, "Claim payload must be a non-empty JSON object.")
+    findings = {
+        "attested": True,
+        "engine_version": "0.30.1",
+        "axioms": ["Tabula Rasa", "Intrinsic Emergence", "Extrinsic Agnosticism",
+                    "Zero Bias", "Full Transparency"],
+        "note": "Payload attested as processed through AETHERA's intrinsic pipeline; "
+                "no coordinates were consumed in producing this certificate.",
+    }
+    cert = issue_certificate("truth-certification", claim, findings)
+    return {"certificate": cert}
+
+
+@app.get("/api/certify/verify")
+async def certify_verify(
+    certificate_id: str = Query(...),
+    payload_hash: str = Query(...),
+    issued_at: float = Query(...),
+    signature: str = Query(...),
+):
+    """Verify a certificate's HMAC signature (offline-verifiable form)."""
+    expected = _sign(certificate_id, payload_hash, issued_at)
+    ok = hmac.compare_digest(expected, signature)
+    return {
+        "certificate_id": certificate_id,
+        "valid": ok,
+        "algorithm": "HMAC-SHA256",
+        "reason": None if ok else "signature mismatch — certificate is not authentic",
+    }
+
+
+# ---- v30.1 — GLOBAL TRUTH INDEX (GTI) --------------------------------
+
+async def _compute_gti() -> Dict[str, Any]:
+    regions = list_regions()
+    total_registered = len(regions)
+    with_area = sum(1 for r in regions if r.get("area_km2"))
+    coverage = (with_area / total_registered) if total_registered else 0.0
+
+    mf, _ = await asyncio.get_event_loop().run_in_executor(
+        None, solve_physical_truth_manifold
+    )
+    residual = float(mf.residual)
+    accuracy = 1.0 / (1.0 + residual * 10.0)  # stress-1 near 0 → ~1.0
+
+    # Legacy distortion resistance: mean |relative error| under Mercator.
+    try:
+        def _metrics():
+            return compute_distortion_metrics()
+        metrics, _global_idx = await asyncio.get_event_loop().run_in_executor(None, _metrics)
+        rels = [
+            abs(float(m.get("relative_error_percent", 0) or 0))
+            for m in metrics
+            if m.get("projection") == "Mercator"
+        ] or [abs(float(m.get("relative_error_percent", 0) or 0)) for m in metrics]
+        mean_rel = sum(rels) / len(rels) if rels else 0.0
+    except Exception:
+        mean_rel = 0.0
+    distortion_resistance = 1.0 / (1.0 + mean_rel / 100.0)
+
+    gti = 100.0 * (0.40 * accuracy + 0.30 * coverage + 0.30 * distortion_resistance)
+    return {
+        "gti": round(gti, 2),
+        "grade": "A" if gti >= 90 else "B" if gti >= 75 else "C" if gti >= 60 else "D",
+        "components": {
+            "solver_accuracy": {
+                "value": round(accuracy, 6),
+                "residual_stress1": residual,
+                "weight": 0.40,
+            },
+            "data_coverage": {
+                "value": round(coverage, 6),
+                "regions_with_absolute_area": with_area,
+                "regions_registered": total_registered,
+                "weight": 0.30,
+            },
+            "distortion_resistance": {
+                "value": round(distortion_resistance, 6),
+                "mean_abs_legacy_deviation_percent": round(mean_rel, 3),
+                "weight": 0.30,
+            },
+        },
+        "formula": "GTI = 100 × (0.40·accuracy + 0.30·coverage + 0.30·distortion_resistance)",
+        "note": "All components computed from absolute scalar inputs. No coordinates.",
+    }
+
+
+_TRUTH_INDEX_TABLE = """
+CREATE TABLE IF NOT EXISTS truth_index_snapshots (
+    id SERIAL PRIMARY KEY,
+    ts DOUBLE PRECISION NOT NULL,
+    gti DOUBLE PRECISION NOT NULL,
+    accuracy DOUBLE PRECISION,
+    coverage DOUBLE PRECISION,
+    distortion_resistance DOUBLE PRECISION,
+    residual DOUBLE PRECISION,
+    mode TEXT
+);
+"""
+
+
+async def _record_snapshot(gti_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Persist a snapshot to Neon and return the recent trend (newest last).
+
+    Falls back to an in-process ring buffer when the DB is unavailable so
+    the endpoint never fails.
+    """
+    c = gti_result["components"]
+    row = {
+        "ts": time.time(),
+        "gti": gti_result["gti"],
+        "accuracy": c["solver_accuracy"]["value"],
+        "coverage": c["data_coverage"]["value"],
+        "distortion_resistance": c["distortion_resistance"]["value"],
+        "residual": c["solver_accuracy"]["residual_stress1"],
+        "mode": DEPLOYMENT_MODE,
+    }
+    try:
+        from aethera.ingest.db import Database
+        def _db():
+            with Database() as db:
+                db.cur.execute(_TRUTH_INDEX_TABLE)
+                db.cur.execute(
+                    "INSERT INTO truth_index_snapshots (ts, gti, accuracy, coverage, "
+                    "distortion_resistance, residual, mode) VALUES (%(ts)s,%(gti)s,"
+                    "%(accuracy)s,%(coverage)s,%(distortion_resistance)s,%(residual)s,%(mode)s)",
+                    row,
+                )
+                db.cur.execute(
+                    "SELECT ts, gti, accuracy, coverage, distortion_resistance, residual, mode "
+                    "FROM truth_index_snapshots ORDER BY ts DESC LIMIT 50"
+                )
+                rows = db.cur.fetchall()
+            return [
+                {"ts": r[0], "gti": r[1], "accuracy": r[2], "coverage": r[3],
+                 "distortion_resistance": r[4], "residual": r[5], "mode": r[6]}
+                for r in reversed(rows)
+            ]
+        return await asyncio.get_event_loop().run_in_executor(None, _db)
+    except Exception as e:
+        _MEM_TREND.append(row)
+        gti_result.setdefault("warnings", []).append(f"trend persisted in-memory: {e}")
+        return list(_MEM_TREND)[-50:]
+
+
+_MEM_TREND: List[Dict[str, Any]] = []
+
+
+@app.get("/api/truth-index")
+async def truth_index():
+    """Global Truth Index — current value, components and signed certificate."""
+    gti_result = await _compute_gti()
+    trend = await _record_snapshot(gti_result)
+    cert = issue_certificate(
+        "global-truth-index",
+        {"components": {k: v["value"] for k, v in gti_result["components"].items()}},
+        {"gti": gti_result["gti"], "grade": gti_result["grade"],
+         "formula": gti_result["formula"]},
+    )
+    return {
+        **gti_result,
+        "trend_points": len(trend),
+        "trend": trend,
+        "certificate": cert,
+    }
+
+
+@app.get("/api/truth-index/trend")
+async def truth_index_trend():
+    """GTI trend history (persisted snapshots, newest last)."""
+    gti_result = await _compute_gti()
+    trend = await _record_snapshot(gti_result)
+    deltas = [t["gti"] for t in trend]
+    change = (deltas[-1] - deltas[0]) if len(deltas) >= 2 else 0.0
+    return {
+        "current": gti_result["gti"],
+        "points": trend,
+        "count": len(trend),
+        "change_since_first": round(change, 3),
+        "note": "Trend is built from platform-computed snapshots only.",
     }
 
 

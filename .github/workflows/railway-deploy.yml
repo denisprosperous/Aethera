@@ -7,11 +7,14 @@ name: Railway Backend Deploy
 # official Railway CLI. It requires the repo secret RAILWAY_TOKEN and an
 # ACTIVE Railway workspace.
 #
-# STATUS 2026-09-07: the Railway workspace trial EXPIRED — the token is
-# rejected ("Unauthorized") and the service 404s. Runs will fail with
-# "trial expired" until the account owner reactivates a plan. No code
-# path can bypass a billing suspension; this workflow exists so that
-# revival is zero-touch: owner reactivates → next push deploys.
+# STATUS 2026-09-08 (v31.3): pipeline fully wired and LIVE-TESTED via
+# workflow_dispatch (run 34141454358) — secret RAILWAY_TOKEN accepted, CLI
+# reached Railway's API, and execution stopped ONLY at the workspace billing
+# gate: "Your trial has expired. Please select a plan to continue using
+# Railway." No code path can bypass a billing suspension; this workflow
+# exists so that revival is zero-touch: owner reactivates a plan → dispatch
+# (or next push) deploys and health-gates automatically.
+# Owner runbook: docs/RAILWAY-DEPLOY-RUNBOOK.md
 
 on:
   push:

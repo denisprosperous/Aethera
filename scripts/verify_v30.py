@@ -66,7 +66,7 @@ def main():
     # A. health
     h = call("GET", "/api/health", timeout=60)
     if h:
-        check("health.version >= 0.32.0", str(h.get("version", "")) >= "0.32.0", str(h.get("version")))
+        check("health.version >= 0.33.0", str(h.get("version", "")) >= "0.33.0", str(h.get("version")))
         check("health.platform startswith AETHERA v", str(h.get("platform", "")).startswith("AETHERA v"), str(h.get("platform")))
         check("llm contract: earth_3d_deep_link", bool(h.get("llm", {}).get("earth_3d_deep_link")), str(h.get("llm", {}).get("earth_3d_deep_link")))
 

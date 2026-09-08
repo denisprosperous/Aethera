@@ -184,9 +184,6 @@ export default function Simulator3DPage() {
         <Link href="/dashboard/simulator" style={{ color: '#06b6d4', fontFamily: 'monospace', fontSize: '12px', textDecoration: 'none' }}>
           🧪 classic simulator →
         </Link>
-        <Link href="/dashboard/globe" style={{ color: '#06b6d4', fontFamily: 'monospace', fontSize: '12px', textDecoration: 'none' }}>
-          🌍 true-area globe →
-        </Link>
       </p>
     </div>
   );

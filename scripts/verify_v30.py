@@ -66,8 +66,9 @@ def main():
     # A. health
     h = call("GET", "/api/health", timeout=60)
     if h:
-        check("health.version == 0.30.1", h.get("version") == "0.30.1", str(h.get("version")))
-        check("health.platform == AETHERA v30.1", h.get("platform") == "AETHERA v30.1", str(h.get("platform")))
+        check("health.version >= 0.32.0", str(h.get("version", "")) >= "0.32.0", str(h.get("version")))
+        check("health.platform startswith AETHERA v", str(h.get("platform", "")).startswith("AETHERA v"), str(h.get("platform")))
+        check("llm contract: earth_3d_deep_link", bool(h.get("llm", {}).get("earth_3d_deep_link")), str(h.get("llm", {}).get("earth_3d_deep_link")))
 
     # B. physical-truth with vertices + edges
     pt = call("GET", "/api/solve/physical-truth", timeout=240)

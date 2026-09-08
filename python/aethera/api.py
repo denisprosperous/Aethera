@@ -50,7 +50,7 @@ app = FastAPI(
     title="AETHERA API",
     description="First objective geometric substrate. No pre-computed areas — "
                 "all areas derived from raw edge lengths + global closure.",
-    version="0.30.1",
+    version="0.32.0",
 )
 
 app.add_middleware(
@@ -218,8 +218,8 @@ async def health():
     from aethera.llm import llm_status
     return {
         "status": "ok",
-        "version": "0.30.1",
-        "platform": "AETHERA v30.1",
+        "version": "0.32.0",
+        "platform": "AETHERA v32.0",
         "mode": DEPLOYMENT_MODE,
         "database": "connected",
         "solver": "rust" if is_rust_available() else "python_fallback",
@@ -236,7 +236,7 @@ async def llm_query(prompt: str = None, system_prompt: str = None,
     {prompt, system_prompt?, model?, api_key?}. A per-request api_key
     overrides the active NVIDIA key without touching server state.
     """
-    from aethera.llm import query_llm
+    from aethera.llm import query_llm, get_system_prompt
     if body:
         prompt = body.get("prompt") or prompt
         system_prompt = body.get("system_prompt") or system_prompt
@@ -247,7 +247,12 @@ async def llm_query(prompt: str = None, system_prompt: str = None,
         api_key = None
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
-    result = await query_llm(prompt, system_prompt, api_key=api_key, model=model)
+    # v32.0: the AETHERA behaviour contract is ALWAYS injected (live link +
+    # mandatory disclaimer, no sphere assumptions, no code-gen offers).
+    result = await query_llm(
+        prompt, get_system_prompt(system_prompt),
+        api_key=api_key, model=model,
+    )
     return {
         "text": result.text,
         "provider": result.provider,
@@ -278,7 +283,7 @@ async def llm_query_alias(body: Optional[Dict[str, Any]] = None):
     contract as the Next.js /api/llm route handler, so the Ctrl+K palette
     works unchanged against either backend. Accepts {prompt,
     system_prompt?, model?, api_key? | apiKey?}."""
-    from aethera.llm import query_llm
+    from aethera.llm import query_llm, get_system_prompt
     body = body or {}
     prompt = body.get("prompt")
     system_prompt = body.get("system_prompt") or body.get("systemPrompt")
@@ -286,7 +291,11 @@ async def llm_query_alias(body: Optional[Dict[str, Any]] = None):
     api_key = body.get("api_key") or body.get("apiKey")
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
-    result = await query_llm(prompt, system_prompt, api_key=api_key, model=model)
+    # v32.0: contract injected here as well (alias route).
+    result = await query_llm(
+        prompt, get_system_prompt(system_prompt),
+        api_key=api_key, model=model,
+    )
     return {
         "text": result.text,
         "provider": result.provider,
@@ -1041,7 +1050,7 @@ async def certify(claim: Dict[str, Any]):
         raise HTTPException(400, "Claim payload must be a non-empty JSON object.")
     findings = {
         "attested": True,
-        "engine_version": "0.30.1",
+        "engine_version": "0.32.0",
         "axioms": ["Tabula Rasa", "Intrinsic Emergence", "Extrinsic Agnosticism",
                     "Zero Bias", "Full Transparency"],
         "note": "Payload attested as processed through AETHERA's intrinsic pipeline; "

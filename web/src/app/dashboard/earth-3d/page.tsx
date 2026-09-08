@@ -117,6 +117,21 @@ export default function Earth3DPage() {
   });
   const router = useRouter();
 
+  // v32.0 deep link: /dashboard/earth-3d?region=<Name> focuses that region.
+  const [focusRegion, setFocusRegion] = useState<string | null>(null);
+  useEffect(() => {
+    const r = new URLSearchParams(window.location.search).get('region');
+    if (r && r.trim()) setFocusRegion(r.trim());
+  }, []);
+
+  // Resolve the deep-link region case-insensitively against loaded data.
+  const resolvedFocus = useMemo<string | null>(() => {
+    if (!focusRegion || !st.data) return null;
+    const needle = focusRegion.toLowerCase();
+    const hit = (st.data.regions || []).find((r) => r.name.toLowerCase() === needle);
+    return hit ? hit.name : null;
+  }, [focusRegion, st.data]);
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -191,6 +206,47 @@ export default function Earth3DPage() {
 
       <Disclaimer />
 
+      {/* v32.0 deep-link focus banner */}
+      {focusRegion && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+            background: '#0d1117', border: '1px solid #1c2a38',
+            borderLeft: `4px solid ${resolvedFocus ? '#00ff88' : '#f59e0b'}`,
+            borderRadius: '8px', padding: '9px 14px', margin: '10px 0 0',
+            fontFamily: 'monospace', fontSize: 11,
+          }}
+        >
+          <span style={{ color: '#5b6b7b', letterSpacing: 1 }}>DEEP LINK · ?region=</span>
+          <span style={{ color: resolvedFocus ? '#00ff88' : '#f59e0b', fontWeight: 600 }}>
+            {focusRegion}
+          </span>
+          {resolvedFocus ? (
+            <>
+              <span style={{ color: '#5b6b7b' }}>
+                focused on the Intrinsic Manifold — ringed in the viewport
+              </span>
+              <Link
+                href={`/dashboard/physical-truth?region=${encodeURIComponent(resolvedFocus)}`}
+                style={{ color: '#06b6d4', textDecoration: 'none' }}
+              >
+                open Truth Panel →
+              </Link>
+            </>
+          ) : (
+            <span style={{ color: '#5b6b7b' }}>
+              {st.loading ? 'resolving against manifold…' : 'no matching region in the solved manifold'}
+            </span>
+          )}
+          <button
+            style={{ ...chip(false), padding: '4px 10px', marginLeft: 'auto' }}
+            onClick={() => setFocusRegion(null)}
+          >
+            ✕ clear focus
+          </button>
+        </div>
+      )}
+
       <div
         style={{
           display: 'flex', flexWrap: 'wrap', gap: '10px 14px', alignItems: 'center',
@@ -252,6 +308,7 @@ export default function Earth3DPage() {
             showHull={controls.showHull}
             autoRotate={controls.autoRotate}
             viewPreset={controls.viewPreset}
+            selectedRegion={resolvedFocus}
             onRegionClick={(region) =>
               router.push(`/dashboard/physical-truth?region=${encodeURIComponent(region)}`)
             }

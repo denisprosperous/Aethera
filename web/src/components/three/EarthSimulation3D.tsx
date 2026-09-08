@@ -54,6 +54,8 @@ export interface EarthSimulation3DProps {
   viewPreset?: 'orbit' | 'planar';
   onRegionClick?: (region: string) => void;
   hudSuffix?: string;
+  /** v32.0 deep link: region name to highlight (focus ring + scale boost). */
+  selectedRegion?: string | null;
 }
 
 const EXTENT = 12;
@@ -192,6 +194,7 @@ export default function EarthSimulation3D({
   viewPreset = 'orbit',
   onRegionClick,
   hudSuffix,
+  selectedRegion = null,
 }: EarthSimulation3DProps) {
   const [hover, setHover] = useState<{ name: string; area: number; position: [number, number, number] } | null>(null);
 
@@ -376,13 +379,21 @@ export default function EarthSimulation3D({
             key={`${n.name}-${i}`}
             position={n.position}
             color={n.heat === null ? ([0.0, 1.0, 0.53] as [number, number, number]) : colorFn!(n.heat)}
-            scale={n.glyph}
+            scale={n.name === selectedRegion ? n.glyph * 2.4 : n.glyph}
             name={n.name}
             area={n.area}
             onClick={() => onRegionClick?.(n.name)}
             onHover={setHover}
           />
         ))}
+        {/* v32.0 deep-link focus ring — marks the ?region= selection without
+            touching the heatmap data (a wireframe shell, not a recolour). */}
+        {selectedRegion && model.nodes.some((nd) => nd.name === selectedRegion) && (
+          <mesh position={model.nodes.find((nd) => nd.name === selectedRegion)!.position}>
+            <sphereGeometry args={[0.42, 18, 18]} />
+            <meshBasicMaterial color="#00ff88" wireframe transparent opacity={0.6} />
+          </mesh>
+        )}
         {labels &&
           Object.entries(labels).map(([name, text]) => {
             const node = model.nodes.find((nd) => nd.name === name);

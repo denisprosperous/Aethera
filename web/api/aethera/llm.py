@@ -1,4 +1,8 @@
-"""AETHERA LLM Integration (v25.0).
+"""AETHERA LLM Integration (v32.0).
+
+v32.0: every LLM response is grounded by AETHERA_SYSTEM_PROMPT (platform
+identity + 3D-simulation behaviour contract: live link + mandatory
+disclaimer, no globe/sphere assumptions, no code-generation offers).
 
 Primary: NVIDIA NIM free endpoints (https://integrate.api.nvidia.com/v1)
 Default model chain (OpenAI-compatible, no user API key required):
@@ -222,6 +226,57 @@ def get_available_providers() -> list:
 
 
 # ---------------------------------------------------------------------------
+# Platform identity & behaviour contract (v32.0)
+# ---------------------------------------------------------------------------
+
+# Deep link to the live 3D Earth simulation (Intrinsic Manifold Viewer).
+EARTH_3D_DEEP_LINK = os.environ.get(
+    "AETHERA_EARTH_3D_URL",
+    "https://aethera-lime.vercel.app/dashboard/earth-3d",
+)
+
+# Mandatory disclaimer — required in every 3D-simulation response.
+EARTH_3D_DISCLAIMER = (
+    "This 3D view is a derived extrinsic embedding of the intrinsic "
+    "manifold. It is not a globe model. The shape is determined solely by "
+    "the absolute scalar inputs. Any resemblance to a sphere is a "
+    "consequence of the data, not an assumption."
+)
+
+# Canonical platform system prompt. Injected into EVERY LLM call by
+# ``get_system_prompt`` so the assistant always behaves as a gateway to the
+# live platform — never as a code-generation service, never assuming a
+# pre-seeded sphere (Axiom 3 · Extrinsic Agnosticism, Axiom 4 · Zero Bias).
+AETHERA_SYSTEM_PROMPT = f"""You are AETHERA, the platform of absolute geometric truth — a sovereign computation geometry platform bound by five axioms: Tabula Rasa (no pre-seeded assumptions), Intrinsic Emergence (structure comes only from the data), Extrinsic Agnosticism (no external coordinate systems — no lon/lat/WGS84/EPSG), Zero Bias (no representation favoured over the data), and Full Transparency (every number carries its rationale).
+
+When a user asks for a 3D Earth simulation:
+
+1. Provide the live link immediately: {EARTH_3D_DEEP_LINK} — to focus a specific region, append a region parameter, e.g. {EARTH_3D_DEEP_LINK}?region=Antarctica
+2. Include the mandatory disclaimer verbatim: "{EARTH_3D_DISCLAIMER}"
+3. Never assume a sphere — refer to the view as the "Intrinsic Manifold Viewer" or the "3D Extrinsic Embedding". Never use the words "globe", "spherical model", or "sphere" as assumptions about the data's shape.
+4. Never offer to generate code or external scripts — the platform already has the simulation built and live. The user experiences it directly on the platform.
+5. Always frame your response as a gateway to the live platform, not a service that produces code. Offer further exploration: specific regions, area-preserving mode, heatmap overlays, Truth Panel certificates, legacy projection comparisons.
+
+Answer in the user's language. Ground every geometric claim in the platform's absolute scalar data (areas in km2, intrinsic edge lengths, solver residuals)."""
+
+
+def get_system_prompt(user_system_prompt: Optional[str] = None) -> str:
+    """Return the effective system prompt for an LLM call.
+
+    The canonical AETHERA contract is ALWAYS present; an optional caller
+    system prompt is appended as additional task context (it can refine,
+    but never override, the five-axiom behaviour contract).
+    """
+    extra = (user_system_prompt or "").strip()
+    if extra:
+        return (
+            f"{AETHERA_SYSTEM_PROMPT}\n\n"
+            f"Additional task context from the caller:\n{extra}"
+        )
+    return AETHERA_SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
 # Query implementations
 # ---------------------------------------------------------------------------
 
@@ -406,6 +461,12 @@ async def query_llm(prompt: str, system_prompt: str = None,
 
 def llm_status() -> dict:
     """Return the status of all LLM providers."""
+    # v32.0: expose the behaviour contract + deep link for dashboards/agents.
+    contract = {
+        "earth_3d_deep_link": EARTH_3D_DEEP_LINK,
+        "earth_3d_disclaimer": EARTH_3D_DISCLAIMER,
+        "system_prompt_chars": len(AETHERA_SYSTEM_PROMPT),
+    }
     providers = []
     for p in LLM_PROVIDERS:
         key = os.environ.get(p["env_key"])
@@ -425,4 +486,5 @@ def llm_status() -> dict:
         "fallback_chain": ["GLM-5.2 (Z.ai)", "DeepSeek", "ChatGPT", "Gemini", "Mistral", "Local LLM"],
         "providers": providers,
         "any_available": True,  # NVIDIA always available via built-in key
+        **contract,  # v32.0 behaviour contract + 3D deep link
     }

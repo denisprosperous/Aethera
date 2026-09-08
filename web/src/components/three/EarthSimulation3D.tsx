@@ -56,6 +56,8 @@ export interface EarthSimulation3DProps {
   hudSuffix?: string;
   /** v32.0 deep link: region name to highlight (focus ring + scale boost). */
   selectedRegion?: string | null;
+  /** v32.1 country visibility: how many region labels to render. */
+  labelDensity?: 'all' | 'major' | 'none';
 }
 
 const EXTENT = 12;
@@ -195,6 +197,7 @@ export default function EarthSimulation3D({
   onRegionClick,
   hudSuffix,
   selectedRegion = null,
+  labelDensity = 'all',
 }: EarthSimulation3DProps) {
   const [hover, setHover] = useState<{ name: string; area: number; position: [number, number, number] } | null>(null);
 
@@ -317,10 +320,11 @@ export default function EarthSimulation3D({
   }, [data, mode, heatmap]);
 
   const labels = useMemo(() => {
-    if (!showLabels) return null;
-    const top = [...data.regions].sort((a, b) => (b.area || 0) - (a.area || 0)).slice(0, 10);
-    return Object.fromEntries(top.map((r) => [r.name, r.name]));
-  }, [data.regions, showLabels]);
+    if (!showLabels || labelDensity === 'none') return null;
+    const sorted = [...data.regions].sort((a, b) => (b.area || 0) - (a.area || 0));
+    const picked = labelDensity === 'major' ? sorted.slice(0, 24) : sorted;
+    return Object.fromEntries(picked.map((r) => [r.name, r.name]));
+  }, [data.regions, showLabels, labelDensity]);
 
   if (!model) {
     return (
@@ -345,7 +349,7 @@ export default function EarthSimulation3D({
     'LEGACY DEVIATION HEATMAP (RED = INFLATED, BLUE = SHRUNK)';
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', borderRadius: '10px' }}>
       <Scene camera={[EXTENT * 1.05, EXTENT * 1.0, EXTENT * 1.45]} autoRotate={autoRotate}>
         <CameraRig preset={viewPreset} />
         <gridHelper args={[EXTENT * 2.9, 26, '#0f2436', '#0a1826']} />
@@ -353,18 +357,18 @@ export default function EarthSimulation3D({
           <mesh geometry={model.triGeom}>
             <meshStandardMaterial
               vertexColors side={THREE.DoubleSide}
-              transparent opacity={0.32} roughness={0.7}
+              transparent opacity={0.45} roughness={0.7}
               depthWrite={false}
             />
           </mesh>
         )}
-        {/* Delaunay hull wireframe — dim */}
+        {/* Delaunay hull wireframe — country-tiling borders (v32.1: readable) */}
         <Line
           points={model.hullEdges.flat()}
-          color="#0e4d3a"
-          lineWidth={1}
+          color="#1fbf8f"
+          lineWidth={1.4}
           transparent
-          opacity={0.5}
+          opacity={0.8}
         />
         {/* Solver's intrinsic edge graph — bright accent */}
         <Line
@@ -398,14 +402,18 @@ export default function EarthSimulation3D({
           Object.entries(labels).map(([name, text]) => {
             const node = model.nodes.find((nd) => nd.name === name);
             if (!node) return null;
+            // v32.1: area-scaled labels — majors accent + larger, minors muted.
+            const major = (node.area || 0) >= 1_000_000;
             return (
               <group key={name} position={[node.position[0], node.position[1] + 0.55, node.position[2]]}>
                 <Html center distanceFactor={22} zIndexRange={[40, 0]}>
                   <div
                     style={{
-                      color: ACCENT, fontFamily: 'monospace', fontSize: 10,
-                      background: 'rgba(4,10,16,0.75)', padding: '2px 7px',
-                      borderRadius: 4, border: '1px solid rgba(0,255,136,0.25)',
+                      color: major ? ACCENT : '#a7bccc', fontFamily: 'monospace',
+                      fontSize: major ? 10 : 7.5,
+                      fontWeight: major ? 600 : 400,
+                      background: 'rgba(4,10,16,0.78)', padding: major ? '2px 7px' : '1px 5px',
+                      borderRadius: 4, border: `1px solid ${major ? 'rgba(0,255,136,0.25)' : 'rgba(140,170,190,0.18)'}`,
                       whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none',
                     }}
                   >

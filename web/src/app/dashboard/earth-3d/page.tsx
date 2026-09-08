@@ -66,6 +66,7 @@ interface ControlState {
   mode: Mode;
   heatmap: Heatmap;
   showLabels: boolean;
+  labelDensity: 'all' | 'major' | 'none';
   showHull: boolean;
   autoRotate: boolean;
   viewPreset: 'orbit' | 'planar';
@@ -75,6 +76,7 @@ const INITIAL_CONTROLS: ControlState = {
   mode: 'intrinsic',
   heatmap: 'area',
   showLabels: true,
+  labelDensity: 'all',
   showHull: true,
   autoRotate: false,
   viewPreset: 'orbit',
@@ -143,7 +145,9 @@ export default function Earth3DPage() {
         // Legacy deviation metrics for the deviation heatmap (best effort).
         const deviationByName: Record<string, number> = {};
         try {
-          const dr = await apiFetch('/api/distortion/ranking?projection=Mercator&limit=300');
+          // v32.1: the ranking endpoint caps limit at 200 (le=200) — a 300
+          // request 422s and silently emptied the deviation heatmap.
+          const dr = await apiFetch('/api/distortion/ranking?projection=Mercator&limit=200');
           if (dr.ok) {
             const dj = await dr.json();
             for (const row of (dj.ranking as Record<string, unknown>[]) || []) {
@@ -282,8 +286,14 @@ export default function Earth3DPage() {
           </button>
         </Group>
         <Group label="LAYERS">
-          <button style={chip(controls.showLabels)} onClick={() => onChange({ showLabels: !controls.showLabels })}>
-            🏷 Labels
+          <button style={chip(controls.showLabels && controls.labelDensity === 'all')} onClick={() => onChange({ showLabels: true, labelDensity: 'all' })}>
+            🏷 Labels·All
+          </button>
+          <button style={chip(controls.showLabels && controls.labelDensity === 'major')} onClick={() => onChange({ showLabels: true, labelDensity: 'major' })}>
+            🏷 Labels·Major
+          </button>
+          <button style={chip(!controls.showLabels)} onClick={() => onChange({ showLabels: false })}>
+            🏷 Off
           </button>
           <button style={chip(controls.showHull)} onClick={() => onChange({ showHull: !controls.showHull })}>
             🕸 Hull
@@ -309,6 +319,7 @@ export default function Earth3DPage() {
             autoRotate={controls.autoRotate}
             viewPreset={controls.viewPreset}
             selectedRegion={resolvedFocus}
+            labelDensity={controls.showLabels ? controls.labelDensity : 'none'}
             onRegionClick={(region) =>
               router.push(`/dashboard/physical-truth?region=${encodeURIComponent(region)}`)
             }
@@ -340,6 +351,14 @@ export default function Earth3DPage() {
         <div>
           <span style={{ color: '#5b6b7b' }}>SOLVER RESIDUAL (STRESS-1) · </span>
           <span style={{ color: '#e6edf3' }}>{st.residual.toExponential(4)}</span>
+        </div>
+        <div>
+          <span style={{ color: '#5b6b7b' }}>LABELS · </span>
+          <span style={{ color: '#e6edf3' }}>
+            {controls.showLabels
+              ? controls.labelDensity === 'all' ? 'All regions (area-scaled)' : 'Major regions (top 24)'
+              : 'Off'}
+          </span>
         </div>
         <div>
           <span style={{ color: '#5b6b7b' }}>HEATMAP · </span>

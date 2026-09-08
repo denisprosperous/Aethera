@@ -274,7 +274,7 @@ export async function runScenario(
   };
 }
 
-/** Fetch per-region legacy deviation for a projection (Distortion 3D / TrueGlobe). */
+/** Fetch per-region legacy deviation for a projection (Distortion 3D / heatmaps). */
 export async function fetchDistortionRanking(
   projection: string,
   limit = 200,

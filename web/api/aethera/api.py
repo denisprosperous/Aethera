@@ -50,7 +50,7 @@ app = FastAPI(
     title="AETHERA API",
     description="First objective geometric substrate. No pre-computed areas — "
                 "all areas derived from raw edge lengths + global closure.",
-    version="0.32.0",
+    version="0.33.0",
 )
 
 app.add_middleware(
@@ -218,8 +218,8 @@ async def health():
     from aethera.llm import llm_status
     return {
         "status": "ok",
-        "version": "0.32.0",
-        "platform": "AETHERA v32.0",
+        "version": "0.33.0",
+        "platform": "AETHERA v33.0",
         "mode": DEPLOYMENT_MODE,
         "database": "connected",
         "solver": "rust" if is_rust_available() else "python_fallback",
@@ -1050,7 +1050,7 @@ async def certify(claim: Dict[str, Any]):
         raise HTTPException(400, "Claim payload must be a non-empty JSON object.")
     findings = {
         "attested": True,
-        "engine_version": "0.32.0",
+        "engine_version": "0.33.0",
         "axioms": ["Tabula Rasa", "Intrinsic Emergence", "Extrinsic Agnosticism",
                     "Zero Bias", "Full Transparency"],
         "note": "Payload attested as processed through AETHERA's intrinsic pipeline; "

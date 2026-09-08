@@ -12,10 +12,15 @@
  * stays curved, exactly as the data decides (Axiom 2 · Intrinsic
  * Emergence, Axiom 3 · Extrinsic Agnosticism, Axiom 4 · Zero Bias).
  *
+ * v33.0: every region renders as a CLOSED COUNTRY TERRITORY — the
+ * nearest-vertex dual of the intrinsic point set (see lib/geometry.ts) —
+ * with crisp borders, heatmap fills and polygon-centred labels. Seed
+ * markers are an explicit toggle, off by default.
+ *
  * Features: intrinsic ↔ area-preserving modes, heatmap toggles (none /
  * true area / legacy deviation), OrbitControls, hover tooltips, click →
- * region module page, legend panel with live solver stats, and the
- * mandatory prominent disclaimer.
+ * region module page, legend panel with live solver + territory stats,
+ * and the mandatory prominent disclaimer.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -25,14 +30,17 @@ import { useRouter } from 'next/navigation';
 import LLMPalette from '@/components/LLMPalette';
 import Disclaimer from '@/components/Disclaimer';
 import { apiFetch } from '@/lib/api';
-import type { EarthSimulation3DData } from '@/components/three/EarthSimulation3D';
+import type {
+  EarthSimulation3DData,
+  TerritoryRenderStats,
+} from '@/components/three/EarthSimulation3D';
 
 const EarthSimulation3D = dynamic(() => import('@/components/three/EarthSimulation3D'), {
   ssr: false,
-  loading: () => <GlobeLoading text="initialising WebGL viewport…" />,
+  loading: () => <ViewportLoading text="initialising WebGL viewport…" />,
 });
 
-function GlobeLoading({ text }: { text: string }) {
+function ViewportLoading({ text }: { text: string }) {
   return (
     <div
       style={{
@@ -67,7 +75,8 @@ interface ControlState {
   heatmap: Heatmap;
   showLabels: boolean;
   labelDensity: 'all' | 'major' | 'none';
-  showHull: boolean;
+  showTerritory: boolean;
+  showNodes: boolean;
   autoRotate: boolean;
   viewPreset: 'orbit' | 'planar';
 }
@@ -77,7 +86,8 @@ const INITIAL_CONTROLS: ControlState = {
   heatmap: 'area',
   showLabels: true,
   labelDensity: 'all',
-  showHull: true,
+  showTerritory: true,
+  showNodes: false, // v33.0: countries are the rendering; seeds are opt-in
   autoRotate: false,
   viewPreset: 'orbit',
 };
@@ -118,6 +128,10 @@ export default function Earth3DPage() {
     residual: 0, nodeCount: 0, edgeCount: 0,
   });
   const router = useRouter();
+
+  // v33.0: territory stats reported by the 3D component (transparency).
+  const [renderStats, setRenderStats] = useState<TerritoryRenderStats | null>(null);
+  const onRenderStats = useCallback((s: TerritoryRenderStats) => setRenderStats(s), []);
 
   // v32.0 deep link: /dashboard/earth-3d?region=<Name> focuses that region.
   const [focusRegion, setFocusRegion] = useState<string | null>(null);
@@ -199,12 +213,13 @@ export default function Earth3DPage() {
     <div style={{ width: '100%', maxWidth: '1200px', margin: '0 auto', color: '#e6edf3' }}>
       <LLMPalette />
       <header style={{ marginBottom: '14px' }}>
-        <h1 style={{ fontSize: '22px', fontWeight: 300, letterSpacing: '2px' }}>🌍 3D EARTH SIMULATION</h1>
+        <h1 style={{ fontSize: '22px', fontWeight: 300, letterSpacing: '2px' }}>◈ 3D EARTH SIMULATION</h1>
         <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '12px', marginTop: '6px', lineHeight: 1.6 }}>
-          The platform fetches the solved intrinsic manifold and renders it in 3D.
-          Vertices = intrinsic coordinates · edges = the solver&apos;s intrinsic edge graph ·
-          colors = absolute scalar data. No sphere, no lon/lat, no WGS84 — the shape
-          is whatever the data says it is.
+          The platform fetches the solved intrinsic manifold and renders every region
+          as a closed country territory — the area-weighted dual of the intrinsic
+          point set, with real border edges, heatmap fills and polygon-centred
+          labels. No pre-seeded shape, no lon/lat, no WGS84 — every polygon is
+          derived from absolute scalar data.
         </p>
       </header>
 
@@ -295,8 +310,8 @@ export default function Earth3DPage() {
           <button style={chip(!controls.showLabels)} onClick={() => onChange({ showLabels: false })}>
             🏷 Off
           </button>
-          <button style={chip(controls.showHull)} onClick={() => onChange({ showHull: !controls.showHull })}>
-            🕸 Hull
+          <button style={chip(controls.showNodes)} onClick={() => onChange({ showNodes: !controls.showNodes })}>
+            ◉ Seed Points
           </button>
           <button style={chip(controls.autoRotate)} onClick={() => onChange({ autoRotate: !controls.autoRotate })}>
             🔄 Auto-rotate
@@ -306,16 +321,18 @@ export default function Earth3DPage() {
 
       <div style={{ height: '580px', margin: '14px 0 16px' }}>
         {st.loading ? (
-          <GlobeLoading text="fetching intrinsic manifold from /api/solve/physical-truth…" />
+          <ViewportLoading text="fetching intrinsic manifold from /api/solve/physical-truth…" />
         ) : st.error || !st.data ? (
-          <GlobeLoading text={`⚠ ${st.error || 'manifold unavailable'} — retry shortly`} />
+          <ViewportLoading text={`⚠ ${st.error || 'manifold unavailable'} — retry shortly`} />
         ) : (
           <EarthSimulation3D
             data={st.data}
             mode={controls.mode}
             heatmap={controls.heatmap}
             showLabels={controls.showLabels}
-            showHull={controls.showHull}
+            showHull={controls.showTerritory}
+            showNodes={controls.showNodes}
+            onRenderStats={onRenderStats}
             autoRotate={controls.autoRotate}
             viewPreset={controls.viewPreset}
             selectedRegion={resolvedFocus}
@@ -340,8 +357,8 @@ export default function Earth3DPage() {
           <span style={{ color: '#5b6b7b' }}>MODE · </span>
           <span style={{ color: '#00ff88' }}>
             {controls.mode === 'intrinsic'
-              ? 'Intrinsic — solver coordinates, untouched'
-              : 'Area-Preserving — post-hoc equal-area relaxation'}
+              ? 'Intrinsic — solver coordinates + unweighted dual, as produced'
+              : 'Area-Preserving — dual re-derived from declared areas, coordinates untouched'}
           </span>
         </div>
         <div>
@@ -366,6 +383,22 @@ export default function Earth3DPage() {
             {controls.heatmap === 'none' ? 'None' : controls.heatmap === 'area' ? 'True Area (log)' : `Legacy Deviation (${deviationHits} metrics)`}
           </span>
         </div>
+        <div>
+          <span style={{ color: '#5b6b7b' }}>TERRITORIES · </span>
+          <span style={{ color: '#e6edf3' }}>
+            {renderStats
+              ? `${renderStats.cells} closed polygons · ${renderStats.borderSegments} border edges`
+              : 'computing dual…'}
+          </span>
+        </div>
+        <div>
+          <span style={{ color: '#5b6b7b' }}>RENDERED↔DECLARED AREA r · </span>
+          <span style={{ color: renderStats?.areaCorrelation != null ? '#00ff88' : '#e6edf3' }}>
+            {renderStats?.areaCorrelation != null
+              ? renderStats.areaCorrelation.toFixed(3)
+              : '—'}
+          </span>
+        </div>
         {controls.heatmap === 'area' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ color: '#5b6b7b' }}>SCALE · </span>
@@ -388,7 +421,7 @@ export default function Earth3DPage() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', marginTop: 14 }}>
-        <Stat label="Regions (nodes)" value={String(st.nodeCount)} accent />
+        <Stat label="Countries (territories)" value={String(st.nodeCount)} accent />
         <Stat label="Intrinsic Edges" value={String(st.edgeCount)} />
         <Stat label="Convergence Residual" value={st.residual.toExponential(4)} accent />
         <Stat label="Σ True Area" value={`${totalArea.toLocaleString()} km²`} />
@@ -398,19 +431,19 @@ export default function Earth3DPage() {
 
       {controls.mode === 'area-preserving' && (
         <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '11px', marginTop: '12px', lineHeight: 1.6 }}>
-          Area-Preserving mode applies a post-hoc equal-area relaxation to the rendered
-          embedding: each region&apos;s rendered footprint is iteratively driven toward its
-          absolute scalar area (km²). The intrinsic solve itself is never modified — the
-          transform is a purely visual derivation, recomputed deterministically in the browser.
+          Area-Preserving mode re-derives the territory boundaries from the declared
+          absolute scalar areas (km²): every country&apos;s capture boundary moves so its
+          rendered cell area approaches its Physical Truth value. The intrinsic
+          coordinates themselves are never modified — the same solver output is
+          rendered in both modes; only the dual&apos;s boundary placement changes,
+          recomputed deterministically in the browser. The residual gap is disclosed
+          by the RENDERED↔DECLARED AREA correlation above.
         </p>
       )}
 
       <p style={{ marginTop: '22px', display: 'flex', gap: '18px', flexWrap: 'wrap' }}>
         <Link href="/dashboard" style={{ color: '#06b6d4', fontFamily: 'monospace', fontSize: '12px', textDecoration: 'none' }}>
           ← back to system overview
-        </Link>
-        <Link href="/dashboard/globe" style={{ color: '#06b6d4', fontFamily: 'monospace', fontSize: '12px', textDecoration: 'none' }}>
-          🌍 true-area globe →
         </Link>
         <Link href="/dashboard/truth" style={{ color: '#06b6d4', fontFamily: 'monospace', fontSize: '12px', textDecoration: 'none' }}>
           ⚖️ truth portal →

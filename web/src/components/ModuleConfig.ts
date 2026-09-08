@@ -33,15 +33,6 @@ export const MODULES = [
     },
   },
   {
-    id: 'true-globe',
-    name: 'True-Area Globe',
-    icon: '🌍',
-    description: 'The globe without assumptions — the emergent Physical Truth manifold in 3D with true-area and legacy-deviation heatmaps.',
-    path: '/dashboard/globe',
-    apiEndpoint: '/solve/physical-truth',
-    testPayload: null,
-  },
-  {
     id: 'simulator',
     name: 'Simulator',
     icon: '🧪',

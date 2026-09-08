@@ -17,7 +17,8 @@ from dataclasses import asdict
 # Ensure the aethera package is importable.
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Body
+import math
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -50,7 +51,7 @@ app = FastAPI(
     title="AETHERA API",
     description="First objective geometric substrate. No pre-computed areas — "
                 "all areas derived from raw edge lengths + global closure.",
-    version="0.33.0",
+    version="0.34.0",
 )
 
 app.add_middleware(
@@ -218,8 +219,8 @@ async def health():
     from aethera.llm import llm_status
     return {
         "status": "ok",
-        "version": "0.33.0",
-        "platform": "AETHERA v33.0",
+        "version": "0.34.0",
+        "platform": "AETHERA v34.0",
         "mode": DEPLOYMENT_MODE,
         "database": "connected",
         "solver": "rust" if is_rust_available() else "python_fallback",
@@ -1050,7 +1051,7 @@ async def certify(claim: Dict[str, Any]):
         raise HTTPException(400, "Claim payload must be a non-empty JSON object.")
     findings = {
         "attested": True,
-        "engine_version": "0.33.0",
+        "engine_version": "0.34.0",
         "axioms": ["Tabula Rasa", "Intrinsic Emergence", "Extrinsic Agnosticism",
                     "Zero Bias", "Full Transparency"],
         "note": "Payload attested as processed through AETHERA's intrinsic pipeline; "
@@ -1227,6 +1228,236 @@ async def truth_index_trend():
         "count": len(trend),
         "change_since_first": round(change, 3),
         "note": "Trend is built from platform-computed snapshots only.",
+    }
+
+
+# AETHERA v34.0 — Consensus Hall of Shame + ACIF edge ledger (wired routes).
+# Purely additive; appended to api.py at build time by scripts/add_v34_routes.py.
+
+_MEM_ACIF: list = []
+
+_ACIF_TABLE = """
+CREATE TABLE IF NOT EXISTS acif_edges (
+    id SERIAL PRIMARY KEY,
+    edge_key TEXT NOT NULL,
+    length_m DOUBLE PRECISION NOT NULL,
+    epoch DOUBLE PRECISION,
+    source TEXT DEFAULT 'ground-station',
+    submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_acif_key_time ON acif_edges (edge_key, submitted_at);
+"""
+
+
+def _acif_norm(a: str, b: str) -> str:
+    x, y = a.strip(), b.strip()
+    lo, hi = (x, y) if x <= y else (y, x)
+    return f"{lo}~{hi}"
+
+
+@app.post("/api/acif/edges")
+async def acif_submit(payload: dict = Body(default={})):
+    """Accept RAW scalar edge lengths (metres) between named stations.
+
+    Absolute scalars only: no orbits, no ephemerides, no datum, no clock
+    model — Axiom 3/4. Anything that is not a finite positive number is
+    rejected.
+    """
+    edges = payload.get("edges") or []
+    if not isinstance(edges, list) or not edges:
+        raise HTTPException(status_code=422, detail="body.edges must be a non-empty list")
+    clean = []
+    for e in edges[:5000]:
+        try:
+            a = str(e["a"]).strip()
+            b = str(e["b"]).strip()
+            lm = float(e["length_m"])
+            epoch = e.get("epoch")
+            epoch = float(epoch) if epoch is not None else None
+            source = str(e.get("source") or "ground-station")[:80]
+        except Exception:
+            raise HTTPException(status_code=422, detail="each edge needs a, b, length_m (finite > 0)")
+        if not a or not b or a == b or not math.isfinite(lm) or lm <= 0:
+            raise HTTPException(status_code=422, detail="invalid edge: need distinct a/b and length_m > 0")
+        clean.append({"key": _acif_norm(a, b), "length_m": lm, "epoch": epoch, "source": source})
+
+    def _db_write():
+        from aethera.ingest.db import Database
+        with Database() as db:
+            db.cur.execute(_ACIF_TABLE)
+            for c in clean:
+                db.cur.execute(
+                    "INSERT INTO acif_edges (edge_key, length_m, epoch, source) "
+                    "VALUES (%(key)s,%(length_m)s,%(epoch)s,%(source)s)",
+                    c,
+                )
+            db.cur.execute("SELECT COUNT(DISTINCT edge_key) FROM acif_edges")
+            total = int(db.cur.fetchone()[0])
+        return total
+
+    db_error = None
+    try:
+        total = await asyncio.get_event_loop().run_in_executor(None, _db_write)
+        store = "postgres"
+    except Exception as e:
+        db_error = str(e)[:300]
+        _MEM_ACIF.extend(clean)
+        total = len({c["key"] for c in _MEM_ACIF})
+        store = "memory"
+    return {
+        "accepted": len(clean),
+        "distinct_edges_total": total,
+        "store": store,
+        "db_error": db_error,
+        "note": "Raw scalar edge ledger. Edges are absolute lengths between named "
+                "stations; the platform derives geometry, it never assumes a datum.",
+    }
+
+
+@app.get("/api/acif/edges")
+async def acif_edges(limit: int = Query(200, ge=1, le=1000)):
+    """Latest scalar value per submitted edge."""
+    def _db_read():
+        from aethera.ingest.db import Database
+        with Database() as db:
+            db.cur.execute(_ACIF_TABLE)
+            db.cur.execute(
+                "SELECT DISTINCT ON (edge_key) edge_key, length_m, epoch, source, submitted_at "
+                "FROM acif_edges ORDER BY edge_key, submitted_at DESC LIMIT %s", (limit,))
+            return db.cur.fetchall()
+    try:
+        rows = await asyncio.get_event_loop().run_in_executor(None, _db_read)
+        rows = [{"edge": r[0], "length_m": r[1], "epoch": r[2], "source": r[3]} for r in rows]
+        store = "postgres"
+    except Exception:
+        latest = {}
+        for c in _MEM_ACIF:
+            latest[c["key"]] = c
+        rows = [{"edge": k, "length_m": v["length_m"], "epoch": v["epoch"], "source": v["source"]}
+                for k, v in list(latest.items())[:limit]]
+        store = "memory"
+    return {"count": len(rows), "store": store, "edges": rows}
+
+
+@app.get("/api/acif/anomaly")
+async def acif_anomaly(threshold_m_per_day: float = Query(0.01, gt=0)):
+    """Flag submitted edges whose length changes faster than a threshold.
+
+    A pure geometric change detector over user-submitted scalars: it
+    reports deltas, never interpretations.
+    """
+    def _db_hist():
+        from aethera.ingest.db import Database
+        with Database() as db:
+            db.cur.execute(_ACIF_TABLE)
+            db.cur.execute(
+                "SELECT edge_key, length_m, epoch, submitted_at FROM acif_edges "
+                "ORDER BY edge_key, submitted_at ASC")
+            return db.cur.fetchall()
+    try:
+        rows = await asyncio.get_event_loop().run_in_executor(None, _db_hist)
+        store = "postgres"
+    except Exception:
+        rows = [(c["key"], c["length_m"], c["epoch"], None) for c in _MEM_ACIF]
+        store = "memory"
+
+    hist = {}
+    for k, lm, ep, ts in rows:
+        t = float(ep) if ep is not None else (ts.timestamp() if ts is not None else None)
+        if t is None:
+            continue
+        hist.setdefault(k, []).append((t, float(lm)))
+
+    anomalies = []
+    for k, series in hist.items():
+        if len(series) < 2:
+            continue
+        (t0, l0), (t1, l1) = series[0], series[-1]
+        dt = t1 - t0
+        if dt <= 0:
+            continue
+        rate = (l1 - l0) / (dt / 86400.0)
+        if abs(rate) > threshold_m_per_day:
+            anomalies.append({
+                "edge": k, "first_length_m": l0, "last_length_m": l1,
+                "delta_m": round(l1 - l0, 6), "days": round(dt / 86400.0, 6),
+                "rate_m_per_day": round(rate, 6),
+            })
+    anomalies.sort(key=lambda a: -abs(a["rate_m_per_day"]))
+    return {
+        "monitored_edges": len(hist),
+        "threshold_m_per_day": threshold_m_per_day,
+        "anomalies": anomalies[:200],
+        "store": store,
+        "note": "Geometric change detector on submitted scalars. Reports deltas "
+                "only — no physical interpretation is implied.",
+    }
+
+
+@app.get("/api/consensus-hall")
+async def consensus_hall(
+    projection: str = Query("Mercator"),
+    group_a: str = Query("", description="Comma-separated region names (preset, editable)"),
+    group_b: str = Query("", description="Comma-separated region names (preset, editable)"),
+    limit: int = Query(60, ge=1, le=200),
+):
+    """Consensus Hall of Shame: legacy-projection strain ranking + a fully
+    disclosed group-inflation score.
+
+    The score is arithmetic on two EDITABLE name lists over stored
+    distortion metrics. The grouping is an input, not a fact.
+    """
+    try:
+        with Database() as db:
+            db.cur.execute(
+                "SELECT region_name, area_physical_m2, area_legacy_m2, relative_error_percent "
+                "FROM distortion_metrics WHERE projection=%s "
+                "ORDER BY ABS(relative_error_percent) DESC LIMIT %s",
+                (projection, limit),
+            )
+            rows = db.cur.fetchall()
+    except Exception:
+        rows = []
+
+    def _split(s: str) -> list:
+        return [x.strip().lower() for x in (s or "").split(",") if x.strip()]
+
+    ga, gb = _split(group_a), _split(group_b)
+
+    def _agg(names):
+        num = 0.0
+        den = 0.0
+        hits = []
+        for r in rows:
+            if r[0].strip().lower() in names:
+                w = max(float(r[1] or 0), 1.0)
+                num += max(float(r[3] or 0), 0.0) * w
+                den += w
+                hits.append(r[0])
+        return (num / den if den else None), hits
+
+    score_a, hits_a = _agg(ga) if ga else (None, [])
+    score_b, hits_b = _agg(gb) if gb else (None, [])
+    ratio = None
+    if score_a is not None and score_b not in (None, 0):
+        ratio = score_a / score_b
+
+    return {
+        "projection": projection,
+        "strain_ranking": [
+            {"region": r[0], "area_physical_m2": r[1], "area_legacy_m2": r[2],
+             "relative_error_percent": r[3]} for r in rows
+        ],
+        "score": {
+            "group_a": {"names": ga, "matched": hits_a, "area_weighted_mean_inflation_pct": score_a},
+            "group_b": {"names": gb, "matched": hits_b, "area_weighted_mean_inflation_pct": score_b},
+            "ratio_a_over_b": ratio,
+            "formula": "ratio = (area-weighted mean positive inflation of A) / (same of B)",
+            "disclosure": "The grouping is an editable input, not a fact. The score is "
+                          "pure arithmetic on stored legacy-vs-physical distortion metrics.",
+        },
+        "note": "Legacy projections are measured artifacts here — the platform itself "
+                "never adopts them as a frame.",
     }
 
 

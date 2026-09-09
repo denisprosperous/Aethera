@@ -146,8 +146,11 @@ if st == 200:
     check("F6: deviation_percent + valid fields present",
           "deviation_percent" in resp and resp.get("valid") is True,
           f"dev={resp.get('deviation_percent')}%")
-    check("F6: certificate present",
-          str(resp.get("certificate", "")).startswith("sha256:"))
+    check("F6: certificates present (sha256 seal + platform HMAC cert)",
+          str(resp.get("seal", "")).startswith("sha256:")
+          and resp.get("certificate", {}).get("certificate_id", "").startswith("AET-"),
+          f"seal={str(resp.get('seal'))[:19]}... "
+          f"cert={resp.get('certificate', {}).get('certificate_id')}")
     # Inflated claim must be rejected.
     k2 = k * math.sqrt(1.2)
     inflated = [[-k2 / 2, -k2 / 2, 0.0], [k2 / 2, -k2 / 2, 0.0],
@@ -180,28 +183,30 @@ if st == 200:
           resp.get("certificate", {}).get("certificate_id", "").startswith("AET-"))
 
 # ------------------------------------------------ F8: viewer completeness
-ok, page_src = call("GET", "/dashboard/earth-3d")
+st, page_src = call("GET", "/dashboard/earth-3d")
 src = page_src if isinstance(page_src, str) else ""
-import re
-m = re.search(r'src="(/_next/static/chunks/app/dashboard/earth-3d/page-[a-f0-9]+\.js)"', src)
-if m:
-    st, chunk = call("GET", m.group(1))
-    body = chunk if isinstance(chunk, str) else ""
-    check("F8: polygons+borders in bundle",
-          "borderPts" in body or "border" in body.lower())
-    check("F8: area-preserving toggle in bundle", "area-preserving" in body)
-    check("F8: heatmap modes in bundle",
-          '"deviation"' in body or "deviation" in body)
-    check("F8: Truth Panel wiring in bundle",
-          "Truth Panel" in body or "truth panel" in body.lower())
-    check("F8: disclaimer text in bundle", "DERIVED VIEW" in body or "derived view" in body.lower())
-else:
-    check("F8: viewer chunk located", False, "page chunk not found in HTML")
+chunk_urls = re.findall(r'src="(/_next/static/[^"]+\.js)"', src)
+bundle = src
+for u in chunk_urls:
+    try:
+        _st, _body = call("GET", u)
+        bundle += _body if isinstance(_body, str) else ""
+    except Exception:
+        pass
+check("F8: viewer JS bundle located", len(chunk_urls) > 0,
+      f"{len(chunk_urls)} chunks")
+check("F8: polygons+borders in bundle", "borderPts" in bundle)
+check("F8: area-preserving toggle in bundle", "Area-Preserving" in bundle)
+check("F8: heatmap modes in bundle", "Legacy Deviation" in bundle)
+check("F8: Truth Panel wiring in bundle", "Truth Panel" in bundle)
+check("F8: disclaimer text in bundle", "DERIVED VIEW" in bundle)
+check("F8: no globe/sphere geometry in bundle",
+      not re.search(r"SphereGeometry|globeGeometry", bundle))
 
 # ------------------------------------------------ LLM contract regression
 try:
     st, resp = call("POST", "/api/llm/query",
-                    {"query": "Give me a 3D simulation of Earth"}, timeout=TIMEOUT)
+                    {"prompt": "Give me a 3D simulation of Earth"}, timeout=TIMEOUT)
     text = json.dumps(resp).lower() if isinstance(resp, dict) else str(resp).lower()
     check("LLM: deep link present",
           "aethera-lime.vercel.app/dashboard/earth-3d" in text)

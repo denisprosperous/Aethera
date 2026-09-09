@@ -1146,10 +1146,10 @@ async def arbitrate_territory(req: ArbitrateTerritoryRequest):
     result = await asyncio.get_event_loop().run_in_executor(
         None, verify_claim, req.polygon, nation, mf
     )
-    findings = {
-        **result,
-        "nation": nation,
-    }
+    findings = {**result, "nation": nation}
+    # Expose both seals: the module's standalone sha256 seal AND the
+    # platform HMAC-SHA256 Truth Certificate (no key shadowing).
+    findings["seal"] = findings.pop("certificate", None)
     cert = issue_certificate(
         "territorial-verification",
         {"nation": nation, "polygon_vertices": len(req.polygon)},

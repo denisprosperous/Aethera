@@ -76,3 +76,4 @@ frontend/.cache/
 backend/.data/
 backend/.cache/
 .vercel
+data/boundaries/

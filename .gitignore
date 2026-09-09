@@ -77,3 +77,6 @@ backend/.data/
 backend/.cache/
 .vercel
 data/boundaries/
+# v36.0: the derived boundary solution bundle must ship (sync_backend
+# copies it into the serverless bundle).
+!python/aethera/data/

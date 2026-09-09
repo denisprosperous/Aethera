@@ -41,6 +41,7 @@ from aethera.modules.physical_truth_manifold import (
 )
 from aethera.modules.ghost_resolver_integration import derive_antarctica_area
 from aethera.modules.ghost import resolve_with_red_flag
+from aethera.modules.maritime import compute_median_line
 from aethera.modules.compare_ingestion import compute_distortion_metrics
 from aethera.agents.acif import AcifSnapshot
 from aethera.agents.dynamics import (
@@ -919,6 +920,20 @@ class MaritimeClaim(BaseModel):
         None, description="Optional claimed share for party_a (0..1); defaults to 0.5 (equal).")
 
 
+class ArbitrateMaritimeRequest(BaseModel):
+    """v35.0 Feature 5: median-line arbitration request."""
+    nation_a: str = Field(..., description="First nation (Physical Truth registry)")
+    nation_b: str = Field(..., description="Second nation (Physical Truth registry)")
+
+
+class ArbitrateTerritoryRequest(BaseModel):
+    """v35.0 Feature 6: territorial integrity verification request."""
+    nation: str = Field(..., description="Nation whose official claim is verified")
+    polygon: List[List[float]] = Field(
+        ..., description="Claimed territorial polygon as [[x, y, z], ...] in the "
+                         "intrinsic manifold embedding")
+
+
 class TerritorialClaim(BaseModel):
     """Territorial arbitration request: disputed area claims."""
     disputed_region: str = Field(..., description="Disputed region name (must exist in Physical Truth registry)")
@@ -1051,6 +1066,96 @@ async def arbitration_territorial(claim: TerritorialClaim):
         findings,
     )
     return {"arbitration": findings, "certificate": cert}
+
+
+# ---------------------------------------------------------------------------
+# AETHERA v35.0 — Features 5 & 6: spec-compliant arbitration endpoints.
+# ---------------------------------------------------------------------------
+
+@app.post("/api/arbitrate/maritime")
+async def arbitrate_maritime(req: ArbitrateMaritimeRequest):
+    """Maritime Arbitration Engine — absolute median line on the intrinsic
+    manifold (v35.0 Feature 5).
+
+    Given two nations, computes the set of points equidistant from both
+    coastlines DIRECTLY ON THE SOLVED MANIFOLD. No sphere assumption, no
+    datum, no lat/lon — the coastlines are discretized from the solver
+    embedding and the median line is the discrete Voronoi boundary between
+    them. Returns median line coordinates and a signed certificate.
+    """
+    a, b = req.nation_a, req.nation_b
+    mf, area_map = await asyncio.get_event_loop().run_in_executor(
+        None, solve_physical_truth_manifold
+    )
+    missing = [n for n in (a, b) if n not in mf.coords]
+    if missing:
+        raise HTTPException(404, f"Unknown nation(s) on the manifold: {', '.join(missing)}")
+
+    graph, _areas = build_physical_truth_edge_graph()
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, compute_median_line, a, b, mf, graph
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+
+    area_a = get_region_area(a)
+    area_b = get_region_area(b)
+    findings = {
+        **result,
+        "nation_a": a,
+        "nation_b": b,
+        "area_a_km2": area_a,
+        "area_b_km2": area_b,
+        "derivation": (
+            "Median line = discrete equidistant set (Voronoi boundary) between "
+            "the two nations' coastlines on the intrinsic manifold. Coastlines "
+            "are solver-embedding discretizations; no sphere, no datum, no "
+            "lat/lon was assumed or consulted."
+        ),
+    }
+    cert = issue_certificate(
+        "maritime-median-line",
+        {"nation_a": a, "nation_b": b},
+        findings,
+    )
+    return {"median_line": result["median_line"], "arbitration": findings, "certificate": cert}
+
+
+@app.post("/api/arbitrate/territory")
+async def arbitrate_territory(req: ArbitrateTerritoryRequest):
+    """Territorial Integrity Verifier (v35.0 Feature 6).
+
+    Given a nation's official territorial claim as a polygon in the
+    intrinsic manifold embedding, computes the TRUE area of that polygon
+    on the manifold, compares it against the Physical Truth official area
+    and returns the deviation, validity verdict and a signed certificate.
+    """
+    from aethera.modules.territory import verify_claim
+
+    nation = req.nation
+    official_area = get_region_area(nation)
+    if not official_area:
+        raise HTTPException(404, f"Region '{nation}' not found in Physical Truth registry.")
+    if len(req.polygon) < 3:
+        raise HTTPException(422, "polygon must contain at least 3 vertices.")
+
+    mf, _area_map = await asyncio.get_event_loop().run_in_executor(
+        None, solve_physical_truth_manifold
+    )
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, verify_claim, req.polygon, nation, mf
+    )
+    findings = {
+        **result,
+        "nation": nation,
+    }
+    cert = issue_certificate(
+        "territorial-verification",
+        {"nation": nation, "polygon_vertices": len(req.polygon)},
+        findings,
+    )
+    return {**findings, "certificate": cert}
 
 
 @app.post("/api/certify")

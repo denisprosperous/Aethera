@@ -39,11 +39,23 @@ import { Line, Html, Billboard } from '@react-three/drei';
 import { Scene, ACCENT, heatColorHex, areaColorHex, ViewportHud } from './Scene';
 import { delaunay, uniqueEdges, fitTransform, type Pt } from '@/lib/delaunay';
 import { buildTerritories, type TerritoryMesh } from '@/lib/geometry';
+import CountryPolygon, { type BoundaryRing } from './CountryPolygon';
 
 export interface EarthRegion {
   name: string;
   area: number;        // absolute area, km²
   deviation: number | null; // legacy deviation, percent (null if unknown)
+}
+
+/** v36.0 — one country's derived boundary geometry (solver output). */
+export interface BoundaryCountry {
+  name: string;
+  rings: [number, number][][];      // solver plane coordinates
+  ringKinds: ('outer' | 'hole')[];
+  area: number;                     // declared absolute area, km²
+  renderedArea?: number;            // rendered polygon area, km²
+  deviation: number | null;         // legacy deviation, percent
+  anchored?: boolean;
 }
 
 export interface EarthSimulation3DData {
@@ -78,6 +90,9 @@ export interface EarthSimulation3DProps {
   labelDensity?: 'all' | 'major' | 'none';
   /** v33.0: territory stats for the legend panel. */
   onRenderStats?: (stats: TerritoryRenderStats) => void;
+  /** v36.0: derived boundary geometry + layer selection. */
+  boundaryData?: BoundaryCountry[] | null;
+  geometryMode?: 'boundary' | 'dual';
 }
 
 const EXTENT = 12;
@@ -127,6 +142,8 @@ export default function EarthSimulation3D({
   selectedRegion = null,
   labelDensity = 'all',
   onRenderStats,
+  boundaryData = null,
+  geometryMode = 'dual',
 }: EarthSimulation3DProps) {
   const [hover, setHover] = useState<{ name: string; area: number; position: [number, number, number] } | null>(null);
 
@@ -134,6 +151,104 @@ export default function EarthSimulation3D({
     heatmap === 'deviation' ? heatColorHex :
     heatmap === 'area' ? areaColorHex :
     null;
+
+  // ---- v36.0: DERIVED BOUNDARY LAYER -------------------------------------
+  // Real country polygons from /api/boundaries/intrinsic — fitted to the
+  // viewport with one shared transform (relative geometry untouched).
+  const boundaryModel = useMemo(() => {
+    if (!boundaryData || boundaryData.length < 3) return null;
+    // Fit the viewport to the ANCHORED world (shelf countries are placed
+    // beyond it by construction and reachable by zooming out).
+    const anchored = boundaryData.filter((c) => c.anchored !== false);
+    const fitSet = anchored.length >= 3 ? anchored : boundaryData;
+    // Robust viewport fit: drop extreme display-area outliers (e.g. the
+    // Antarctic polar band) from the extent computation only.
+    const bboxArea = (c: { rings: [number, number][][] }) => {
+      let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
+      for (const r of c.rings) for (const [x, y] of r) {
+        if (x < minx) minx = x; if (x > maxx) maxx = x;
+        if (y < miny) miny = y; if (y > maxy) maxy = y;
+      }
+      return (maxx - minx) * (maxy - miny);
+    };
+    const areas = fitSet.map(bboxArea);
+    const med = [...areas].sort((a, b) => a - b)[Math.floor(areas.length / 2)] || 1;
+    const robust = fitSet.filter((c, i) => areas[i] <= med * 8);
+    const useSet = robust.length >= 3 ? robust : fitSet;
+    const allPts: Pt[] = [];
+    for (const c of useSet) for (const r of c.rings) for (const [x, y] of r) allPts.push({ x, y });
+    if (allPts.length < 3) return null;
+    const tf = fitTransform(allPts, EXTENT);
+    const map = (p: [number, number]): [number, number] =>
+      [(p[0] - tf.cx) * tf.scale, -(p[1] - tf.cy) * tf.scale];
+
+    const areaLogs = boundaryData.map((c) => Math.log10(Math.max(1, c.area || 1)));
+    const lmin = Math.min(...areaLogs);
+    const lmax = Math.max(...areaLogs);
+    const heatOf = (i: number): number | null => {
+      if (heatmap === 'deviation') {
+        const d = boundaryData[i].deviation;
+        if (d === null || !Number.isFinite(d)) return null;
+        return 0.5 + Math.max(-1, Math.min(1, d / 200)) * 0.5;
+      }
+      if (heatmap === 'area') return (areaLogs[i] - lmin) / Math.max(1e-9, lmax - lmin);
+      return null;
+    };
+
+    const majorNames = new Set(
+      [...boundaryData].sort((a, b) => (b.area || 0) - (a.area || 0))
+        .slice(0, 24).map((c) => c.name),
+    );
+
+    const countries = boundaryData.map((c, i) => {
+      const h = heatOf(i);
+      const neutral = '#12321f';
+      const fill = h === null ? neutral : `rgb(${colorFn!(h).map((v) => Math.round(v * 255)).join(',')})`;
+      const rings: BoundaryRing[] = c.rings
+        .map((pts, ri) => ({ pts: pts.map(map), kind: c.ringKinds[ri] || 'outer' }))
+        .filter((r) => r.pts.length >= 3);
+      const showLabel =
+        !!showLabels && labelDensity !== 'none' &&
+        (labelDensity === 'all' || majorNames.has(c.name) || c.name === selectedRegion);
+      return { country: c, rings, fill, showLabel, major: majorNames.has(c.name) };
+    }).filter((entry) => entry.rings.some((r) => r.kind === 'outer'));
+
+    // Transparency stats: rendered polygon area vs declared area.
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const c of boundaryData) {
+      if (c.renderedArea && c.renderedArea > 1 && c.area > 1) {
+        xs.push(Math.log10(c.renderedArea));
+        ys.push(Math.log10(c.area));
+      }
+    }
+
+    let borderSegments = 0;
+    for (const entry of countries) borderSegments += entry.rings.length;
+
+    return {
+      countries,
+      stats: {
+        cells: countries.length,
+        borderSegments,
+        areaCorrelation: pearson(xs, ys),
+      } as TerritoryRenderStats,
+    };
+  }, [boundaryData, heatmap, showLabels, labelDensity, selectedRegion, colorFn]);
+
+  // Report boundary stats (transparency panel).
+  const boundaryStatsRef = useRef<TerritoryRenderStats | null>(null);
+  useEffect(() => {
+    if (geometryMode !== 'boundary' || !boundaryModel || !onRenderStats) return;
+    const st = boundaryModel.stats;
+    const prev = boundaryStatsRef.current;
+    if (
+      prev && prev.cells === st.cells && prev.borderSegments === st.borderSegments &&
+      Math.abs((prev.areaCorrelation ?? -2) - (st.areaCorrelation ?? -2)) < 1e-9
+    ) return;
+    boundaryStatsRef.current = st;
+    onRenderStats(st);
+  }, [geometryMode, boundaryModel, onRenderStats]);
 
   const model = useMemo(() => {
     const regions = data.regions;
@@ -357,6 +472,19 @@ export default function EarthSimulation3D({
     return Object.fromEntries(picked.map((l) => [l.name, l]));
   }, [model, showLabels, labelDensity]);
 
+  if (geometryMode === 'boundary' && !boundaryModel) {
+    return (
+      <div
+        style={{
+          width: '100%', height: '100%', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', color: '#5b6b7b', fontFamily: 'monospace', fontSize: 12,
+        }}
+      >
+        Derived boundary geometry unavailable — check /api/boundaries/intrinsic.
+      </div>
+    );
+  }
+
   if (!model) {
     return (
       <div
@@ -385,6 +513,27 @@ export default function EarthSimulation3D({
         <CameraRig preset={viewPreset} />
         <gridHelper args={[EXTENT * 2.9, 26, '#0f2436', '#0a1826']} />
 
+        {/* v36.0: DERIVED COUNTRY BOUNDARIES — real closed polygons with
+            borders and centroid labels from /api/boundaries/intrinsic. */}
+        {geometryMode === 'boundary' && boundaryModel && boundaryModel.countries.map((entry) => (
+          <CountryPolygon
+            key={`b-${entry.country.name}`}
+            name={entry.country.name}
+            rings={entry.rings}
+            fillColor={entry.fill}
+            borderColor="#e8fff4"
+            areaKm2={entry.country.area}
+            major={entry.major}
+            showLabel={entry.showLabel}
+            selected={entry.country.name === selectedRegion}
+            accent={ACCENT}
+            onPick={(nm) => onRegionClick?.(nm)}
+            onHover={setHover}
+          />
+        ))}
+
+        {geometryMode !== 'boundary' && (
+        <>
         {/* Country territories — closed convex polygons, one flat colour per
             country (the owner's heat colour). Pointer events resolve the
             hovered/clicked country via faceIndex → owner. */}
@@ -514,6 +663,9 @@ export default function EarthSimulation3D({
             );
           })}
 
+        </>
+        )}
+
         {/* Hover tooltip — anchored to the hovered country's centroid. */}
         {hover && (
           <Html position={hover.position} center distanceFactor={16} zIndexRange={[50, 0]}>
@@ -534,7 +686,11 @@ export default function EarthSimulation3D({
       </Scene>
 
       <ViewportHud
-        text={`3D EARTH SIMULATION — ${model.stats.cells} COUNTRY TERRITORIES · ${model.stats.borderSegments} BORDER SEGMENTS · VORONOI DUAL OF THE INTRINSIC POINT SET · ${modeHud} · ${heatHud}${hudSuffix ? ` · ${hudSuffix}` : ''}`}
+        text={
+          geometryMode === 'boundary' && boundaryModel
+            ? `3D EARTH SIMULATION — ${boundaryModel.stats.cells} DERIVED COUNTRY BOUNDARIES · ${boundaryModel.stats.borderSegments} BOUNDARY RINGS · TURTLE-WALK RECONSTRUCTION FROM SCALAR LENGTHS + DIRECTIONS · ${heatHud}${hudSuffix ? ` · ${hudSuffix}` : ''}`
+            : `3D EARTH SIMULATION — ${model.stats.cells} COUNTRY TERRITORIES · ${model.stats.borderSegments} BORDER SEGMENTS · VORONOI DUAL OF THE INTRINSIC POINT SET · ${modeHud} · ${heatHud}${hudSuffix ? ` · ${hudSuffix}` : ''}`
+        }
       />
 
       {/* Hover fallback strip (non-3D text under the HUD) */}

@@ -33,6 +33,7 @@ import { apiFetch } from '@/lib/api';
 import type {
   EarthSimulation3DData,
   TerritoryRenderStats,
+  BoundaryCountry,
 } from '@/components/three/EarthSimulation3D';
 
 const EarthSimulation3D = dynamic(() => import('@/components/three/EarthSimulation3D'), {
@@ -69,6 +70,7 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
 
 type Mode = 'intrinsic' | 'area-preserving';
 type Heatmap = 'none' | 'area' | 'deviation';
+type GeometryMode = 'boundary' | 'dual';
 
 interface ControlState {
   mode: Mode;
@@ -79,6 +81,7 @@ interface ControlState {
   showNodes: boolean;
   autoRotate: boolean;
   viewPreset: 'orbit' | 'planar';
+  geometryMode: GeometryMode;
 }
 
 const INITIAL_CONTROLS: ControlState = {
@@ -90,6 +93,7 @@ const INITIAL_CONTROLS: ControlState = {
   showNodes: false, // v33.0: countries are the rendering; seeds are opt-in
   autoRotate: false,
   viewPreset: 'orbit',
+  geometryMode: 'boundary', // v36.0: derived country boundaries by default
 };
 
 const chip = (active: boolean) => ({
@@ -116,6 +120,8 @@ interface LoadState {
   loading: boolean;
   error: string;
   data: EarthSimulation3DData | null;
+  boundary: BoundaryCountry[] | null;
+  boundaryStats: { countries: number; vertices: number; anchored: number; shelf: number } | null;
   residual: number;
   nodeCount: number;
   edgeCount: number;
@@ -124,7 +130,7 @@ interface LoadState {
 export default function Earth3DPage() {
   const [controls, setControls] = useState<ControlState>(INITIAL_CONTROLS);
   const [st, setSt] = useState<LoadState>({
-    loading: true, error: '', data: null,
+    loading: true, error: '', data: null, boundary: null, boundaryStats: null,
     residual: 0, nodeCount: 0, edgeCount: 0,
   });
   const router = useRouter();
@@ -181,9 +187,38 @@ export default function Earth3DPage() {
             deviation: deviationByName[String(r.name)] ?? null,
           })),
         };
+
+        // v36.0: derived country boundary geometry (best-effort layer —
+        // the dual view remains as fallback).
+        let boundary: BoundaryCountry[] | null = null;
+        let boundaryStats: LoadState['boundaryStats'] = null;
+        try {
+          const bres = await apiFetch('/api/boundaries/intrinsic');
+          if (bres.ok) {
+            const bj = await bres.json();
+            boundary = ((bj.countries as Record<string, unknown>[]) || []).map((c) => ({
+              name: String(c.name),
+              rings: ((c.rings as number[][][]) || []) as [number, number][][],
+              ringKinds: (c.ring_kinds as ('outer' | 'hole')[]) || [],
+              area: Number(c.declared_area_km2) || 0,
+              renderedArea: Number(c.rendered_area_km2) || undefined,
+              deviation: deviationByName[String(c.name)] ?? null,
+              anchored: Boolean(c.anchored),
+            }));
+            const bs = (bj.stats as Record<string, unknown>) || {};
+            boundaryStats = {
+              countries: Number(bs.countries) || (boundary ? boundary.length : 0),
+              vertices: Number(bs.boundary_vertices) || 0,
+              anchored: Number(bs.anchored_countries) || 0,
+              shelf: Number(bs.shelf_countries) || 0,
+            };
+          }
+        } catch { /* boundary layer is optional */ }
         if (!alive) return;
         setSt({
           loading: false, error: '', data,
+          boundary,
+          boundaryStats,
           residual: Number(j.residual) || 0,
           nodeCount: Number(j.node_count) || rawRegions.length,
           edgeCount: Number(j.edge_count) || (j.edges as unknown[])?.length || 0,
@@ -215,11 +250,11 @@ export default function Earth3DPage() {
       <header style={{ marginBottom: '14px' }}>
         <h1 style={{ fontSize: '22px', fontWeight: 300, letterSpacing: '2px' }}>◈ 3D EARTH SIMULATION</h1>
         <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '12px', marginTop: '6px', lineHeight: 1.6 }}>
-          The platform fetches the solved intrinsic manifold and renders every region
-          as a closed country territory — the area-weighted dual of the intrinsic
-          point set, with real border edges, heatmap fills and polygon-centred
-          labels. No pre-seeded shape, no lon/lat, no WGS84 — every polygon is
-          derived from absolute scalar data.
+          v36.0: every country renders as its DERIVED BOUNDARY — a closed polygon
+          reconstructed from globe-agnostic scalar data (edge lengths + walk-frame
+          directions, stitched across shared borders, closed against declared absolute
+          areas). No pre-seeded shape, no lon/lat, no WGS84, no EPSG. The intrinsic dual
+          view (v33) remains available as a layer.
         </p>
       </header>
 
@@ -273,6 +308,14 @@ export default function Earth3DPage() {
           padding: '12px 14px', opacity: st.loading ? 0.5 : 1,
         }}
       >
+        <Group label="GEOMETRY">
+          <button style={chip(controls.geometryMode === 'boundary')} onClick={() => onChange({ geometryMode: 'boundary' })}>
+            ◙ Boundaries (v36)
+          </button>
+          <button style={chip(controls.geometryMode === 'dual')} onClick={() => onChange({ geometryMode: 'dual' })}>
+            ⬡ Intrinsic Dual (v33)
+          </button>
+        </Group>
         <Group label="MODE">
           <button style={chip(controls.mode === 'intrinsic')} onClick={() => onChange({ mode: 'intrinsic' })}>
             🧬 Intrinsic (solver output)
@@ -327,6 +370,8 @@ export default function Earth3DPage() {
         ) : (
           <EarthSimulation3D
             data={st.data}
+            boundaryData={st.boundary}
+            geometryMode={controls.geometryMode === 'boundary' && st.boundary ? 'boundary' : 'dual'}
             mode={controls.mode}
             heatmap={controls.heatmap}
             showLabels={controls.showLabels}
@@ -353,6 +398,14 @@ export default function Earth3DPage() {
           borderRadius: '10px', padding: '12px 16px', fontFamily: 'monospace', fontSize: 11,
         }}
       >
+        <div>
+          <span style={{ color: '#5b6b7b' }}>GEOMETRY · </span>
+          <span style={{ color: '#00ff88' }}>
+            {controls.geometryMode === 'boundary'
+              ? 'Derived country boundaries — turtle-walk reconstruction from scalar lengths + directions, stitched across shared borders'
+              : 'Intrinsic dual — area-weighted capture cells of the intrinsic point set'}
+          </span>
+        </div>
         <div>
           <span style={{ color: '#5b6b7b' }}>MODE · </span>
           <span style={{ color: '#00ff88' }}>
@@ -387,8 +440,8 @@ export default function Earth3DPage() {
           <span style={{ color: '#5b6b7b' }}>TERRITORIES · </span>
           <span style={{ color: '#e6edf3' }}>
             {renderStats
-              ? `${renderStats.cells} closed polygons · ${renderStats.borderSegments} border edges`
-              : 'computing dual…'}
+              ? `${renderStats.cells} closed polygons · ${renderStats.borderSegments} ${controls.geometryMode === 'boundary' ? 'boundary rings' : 'border edges'}`
+              : 'computing…'}
           </span>
         </div>
         <div>
@@ -422,12 +475,28 @@ export default function Earth3DPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', marginTop: 14 }}>
         <Stat label="Countries (territories)" value={String(st.nodeCount)} accent />
+        <Stat label="Boundary Countries (v36)" value={String(st.boundaryStats?.countries ?? '—')} accent />
+        <Stat label="Boundary Vertices" value={st.boundaryStats ? st.boundaryStats.vertices.toLocaleString() : '—'} />
         <Stat label="Intrinsic Edges" value={String(st.edgeCount)} />
         <Stat label="Convergence Residual" value={st.residual.toExponential(4)} accent />
         <Stat label="Σ True Area" value={`${totalArea.toLocaleString()} km²`} />
         <Stat label="Deviation Metrics" value={String(deviationHits)} />
-        <Stat label="Source" value="/api/solve/physical-truth" />
+        <Stat label="Source" value={controls.geometryMode === 'boundary' ? '/api/boundaries/intrinsic' : '/api/solve/physical-truth'} />
       </div>
+
+      {controls.geometryMode === 'boundary' && (
+        <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '11px', marginTop: '12px', lineHeight: 1.6 }}>
+          Boundary geometry disclosure: every country polygon is reconstructed from
+          globe-agnostic scalar data only — per-edge lengths and walk-frame directions
+          (an exact turtle-walk), stitched rigidly across shared border vertices,
+          rotated/translated onto the platform&apos;s own Physical Truth intrinsic layout,
+          and closed against declared absolute areas by one global scale. No lon/lat,
+          no WGS84, no EPSG enters the pipeline. Countries with no scalar anchor to the
+          layout are placed on a deterministic shelf and disclosed in the stats. This is
+          a geometric simulation for transparency and analysis — not a navigational or
+          legal boundary reference.
+        </p>
+      )}
 
       {controls.mode === 'area-preserving' && (
         <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '11px', marginTop: '12px', lineHeight: 1.6 }}>

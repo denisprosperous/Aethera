@@ -40,6 +40,8 @@ from aethera.modules.physical_truth_manifold import (
     list_regions, get_region_area,
 )
 from aethera.modules.ghost_resolver_integration import derive_antarctica_area
+from aethera.modules.ghost import resolve_with_red_flag
+from aethera.modules.maritime import compute_median_line
 from aethera.modules.compare_ingestion import compute_distortion_metrics
 from aethera.agents.acif import AcifSnapshot
 from aethera.agents.dynamics import (
@@ -51,7 +53,7 @@ app = FastAPI(
     title="AETHERA API",
     description="First objective geometric substrate. No pre-computed areas — "
                 "all areas derived from raw edge lengths + global closure.",
-    version="0.34.0",
+    version="0.35.0",
 )
 
 app.add_middleware(
@@ -120,6 +122,7 @@ class GhostResolveResponse(BaseModel):
     red_flags: List[Dict[str, Any]]
     rationale_log: List[Dict[str, Any]]
     sealed_hash: str
+    red_flag_report: List[Dict[str, Any]] = []
     note: str
 
 class AlienReconstructRequest(BaseModel):
@@ -219,8 +222,8 @@ async def health():
     from aethera.llm import llm_status
     return {
         "status": "ok",
-        "version": "0.34.0",
-        "platform": "AETHERA v34.0",
+        "version": "0.35.0",
+        "platform": "AETHERA v35.0",
         "mode": DEPLOYMENT_MODE,
         "database": "connected",
         "solver": "rust" if is_rust_available() else "python_fallback",
@@ -451,11 +454,22 @@ async def ghost_resolve(req: GhostResolveRequest):
         else:
             rationale_log.append(r.__dict__ if hasattr(r, '__dict__') else str(r))
     
+    # v35.0 Feature 4: Geometric Red Flag reports — regions whose derived
+    # area deviates >5% from the official claimed value are flagged CENSORED
+    # with a sealed report (derived area, official area, deviation %, seal,
+    # Rationale Engine log).
+    try:
+        flagged = resolve_with_red_flag(req.polygons, req.global_area, req.global_enclosure)
+        red_flag_report = [r.red_flag_report for r in flagged if r.red_flag_report]
+    except Exception:  # report layer must never break resolution
+        red_flag_report = []
+
     return GhostResolveResponse(
         resolved_areas=resolved,
         red_flags=red_flags,
         rationale_log=rationale_log,
         sealed_hash=report.sealed_hash,
+        red_flag_report=red_flag_report,
         note="Areas derived via topological residual closure. No pre-computed areas used.",
     )
 
@@ -906,6 +920,20 @@ class MaritimeClaim(BaseModel):
         None, description="Optional claimed share for party_a (0..1); defaults to 0.5 (equal).")
 
 
+class ArbitrateMaritimeRequest(BaseModel):
+    """v35.0 Feature 5: median-line arbitration request."""
+    nation_a: str = Field(..., description="First nation (Physical Truth registry)")
+    nation_b: str = Field(..., description="Second nation (Physical Truth registry)")
+
+
+class ArbitrateTerritoryRequest(BaseModel):
+    """v35.0 Feature 6: territorial integrity verification request."""
+    nation: str = Field(..., description="Nation whose official claim is verified")
+    polygon: List[List[float]] = Field(
+        ..., description="Claimed territorial polygon as [[x, y, z], ...] in the "
+                         "intrinsic manifold embedding")
+
+
 class TerritorialClaim(BaseModel):
     """Territorial arbitration request: disputed area claims."""
     disputed_region: str = Field(..., description="Disputed region name (must exist in Physical Truth registry)")
@@ -1040,6 +1068,96 @@ async def arbitration_territorial(claim: TerritorialClaim):
     return {"arbitration": findings, "certificate": cert}
 
 
+# ---------------------------------------------------------------------------
+# AETHERA v35.0 — Features 5 & 6: spec-compliant arbitration endpoints.
+# ---------------------------------------------------------------------------
+
+@app.post("/api/arbitrate/maritime")
+async def arbitrate_maritime(req: ArbitrateMaritimeRequest):
+    """Maritime Arbitration Engine — absolute median line on the intrinsic
+    manifold (v35.0 Feature 5).
+
+    Given two nations, computes the set of points equidistant from both
+    coastlines DIRECTLY ON THE SOLVED MANIFOLD. No sphere assumption, no
+    datum, no lat/lon — the coastlines are discretized from the solver
+    embedding and the median line is the discrete Voronoi boundary between
+    them. Returns median line coordinates and a signed certificate.
+    """
+    a, b = req.nation_a, req.nation_b
+    mf, area_map = await asyncio.get_event_loop().run_in_executor(
+        None, solve_physical_truth_manifold
+    )
+    missing = [n for n in (a, b) if n not in mf.coords]
+    if missing:
+        raise HTTPException(404, f"Unknown nation(s) on the manifold: {', '.join(missing)}")
+
+    graph, _areas = build_physical_truth_edge_graph()
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, compute_median_line, a, b, mf, graph
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+
+    area_a = get_region_area(a)
+    area_b = get_region_area(b)
+    findings = {
+        **result,
+        "nation_a": a,
+        "nation_b": b,
+        "area_a_km2": area_a,
+        "area_b_km2": area_b,
+        "derivation": (
+            "Median line = discrete equidistant set (Voronoi boundary) between "
+            "the two nations' coastlines on the intrinsic manifold. Coastlines "
+            "are solver-embedding discretizations; no sphere, no datum, no "
+            "lat/lon was assumed or consulted."
+        ),
+    }
+    cert = issue_certificate(
+        "maritime-median-line",
+        {"nation_a": a, "nation_b": b},
+        findings,
+    )
+    return {"median_line": result["median_line"], "arbitration": findings, "certificate": cert}
+
+
+@app.post("/api/arbitrate/territory")
+async def arbitrate_territory(req: ArbitrateTerritoryRequest):
+    """Territorial Integrity Verifier (v35.0 Feature 6).
+
+    Given a nation's official territorial claim as a polygon in the
+    intrinsic manifold embedding, computes the TRUE area of that polygon
+    on the manifold, compares it against the Physical Truth official area
+    and returns the deviation, validity verdict and a signed certificate.
+    """
+    from aethera.modules.territory import verify_claim
+
+    nation = req.nation
+    official_area = get_region_area(nation)
+    if not official_area:
+        raise HTTPException(404, f"Region '{nation}' not found in Physical Truth registry.")
+    if len(req.polygon) < 3:
+        raise HTTPException(422, "polygon must contain at least 3 vertices.")
+
+    mf, _area_map = await asyncio.get_event_loop().run_in_executor(
+        None, solve_physical_truth_manifold
+    )
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, verify_claim, req.polygon, nation, mf
+    )
+    findings = {
+        **result,
+        "nation": nation,
+    }
+    cert = issue_certificate(
+        "territorial-verification",
+        {"nation": nation, "polygon_vertices": len(req.polygon)},
+        findings,
+    )
+    return {**findings, "certificate": cert}
+
+
 @app.post("/api/certify")
 async def certify(claim: Dict[str, Any]):
     """Issue a signed Truth Certificate for an arbitrary claim payload.
@@ -1051,7 +1169,7 @@ async def certify(claim: Dict[str, Any]):
         raise HTTPException(400, "Claim payload must be a non-empty JSON object.")
     findings = {
         "attested": True,
-        "engine_version": "0.34.0",
+        "engine_version": "0.35.0",
         "axioms": ["Tabula Rasa", "Intrinsic Emergence", "Extrinsic Agnosticism",
                     "Zero Bias", "Full Transparency"],
         "note": "Payload attested as processed through AETHERA's intrinsic pipeline; "
@@ -1194,6 +1312,67 @@ async def _record_snapshot(gti_result: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 _MEM_TREND: List[Dict[str, Any]] = []
+
+
+async def _fetch_trend() -> List[Dict[str, Any]]:
+    """Read-only GTI trend fetch (no snapshot write). Falls back to the
+    in-process ring buffer when the DB is unavailable."""
+    try:
+        from aethera.ingest.db import Database
+
+        def _db():
+            with Database() as db:
+                db.cur.execute(_TRUTH_INDEX_TABLE)
+                db.cur.execute(
+                    "SELECT ts, gti, accuracy, coverage, distortion_resistance, "
+                    "residual, mode FROM truth_index_snapshots "
+                    "ORDER BY ts DESC LIMIT 50"
+                )
+                rows = db.cur.fetchall()
+            return [
+                {"ts": r[0], "gti": r[1], "accuracy": r[2], "coverage": r[3],
+                 "distortion_resistance": r[4], "residual": r[5], "mode": r[6]}
+                for r in reversed(rows)
+            ]
+
+        return await asyncio.get_event_loop().run_in_executor(None, _db)
+    except Exception:
+        return list(_MEM_TREND)[-50:]
+
+
+@app.get("/api/truth/index")
+async def truth_index_spec():
+    """Global Truth Index — v35.0 spec shape (Feature 7).
+
+    Returns the aggregate deviation of all legacy maps (Mercator reference)
+    from AETHERA's Physical Truth: {gti, total_physical_area,
+    total_legacy_area, trend_data} plus the signed certificate.
+    """
+    from aethera.truth_index import compute_gti as compute_gti_spec
+    result = await asyncio.get_event_loop().run_in_executor(None, compute_gti_spec)
+    trend = await _fetch_trend()
+    cert = issue_certificate(
+        "global-truth-index",
+        {"projection": result["projection"],
+         "matched_regions": result["matched_regions"]},
+        {"gti": result["gti"],
+         "total_physical_area": result["total_physical_area"],
+         "total_legacy_area": result["total_legacy_area"],
+         "formula": result["formula"]},
+    )
+    return {
+        "gti": result["gti"],
+        "total_physical_area": result["total_physical_area"],
+        "total_legacy_area": result["total_legacy_area"],
+        "trend_data": trend,
+        "total_absolute_deviation_km2": result["total_absolute_deviation_km2"],
+        "matched_regions": result["matched_regions"],
+        "projection": result["projection"],
+        "formula": result["formula"],
+        "per_projection": result["per_projection"],
+        "top_deviations": result["per_region"][:10],
+        "certificate": cert,
+    }
 
 
 @app.get("/api/truth-index")

@@ -40,6 +40,7 @@ from aethera.modules.physical_truth_manifold import (
     list_regions, get_region_area,
 )
 from aethera.modules.ghost_resolver_integration import derive_antarctica_area
+from aethera.modules.ghost import resolve_with_red_flag
 from aethera.modules.compare_ingestion import compute_distortion_metrics
 from aethera.agents.acif import AcifSnapshot
 from aethera.agents.dynamics import (
@@ -51,7 +52,7 @@ app = FastAPI(
     title="AETHERA API",
     description="First objective geometric substrate. No pre-computed areas — "
                 "all areas derived from raw edge lengths + global closure.",
-    version="0.34.0",
+    version="0.35.0",
 )
 
 app.add_middleware(
@@ -120,6 +121,7 @@ class GhostResolveResponse(BaseModel):
     red_flags: List[Dict[str, Any]]
     rationale_log: List[Dict[str, Any]]
     sealed_hash: str
+    red_flag_report: List[Dict[str, Any]] = []
     note: str
 
 class AlienReconstructRequest(BaseModel):
@@ -219,8 +221,8 @@ async def health():
     from aethera.llm import llm_status
     return {
         "status": "ok",
-        "version": "0.34.0",
-        "platform": "AETHERA v34.0",
+        "version": "0.35.0",
+        "platform": "AETHERA v35.0",
         "mode": DEPLOYMENT_MODE,
         "database": "connected",
         "solver": "rust" if is_rust_available() else "python_fallback",
@@ -451,11 +453,22 @@ async def ghost_resolve(req: GhostResolveRequest):
         else:
             rationale_log.append(r.__dict__ if hasattr(r, '__dict__') else str(r))
     
+    # v35.0 Feature 4: Geometric Red Flag reports — regions whose derived
+    # area deviates >5% from the official claimed value are flagged CENSORED
+    # with a sealed report (derived area, official area, deviation %, seal,
+    # Rationale Engine log).
+    try:
+        flagged = resolve_with_red_flag(req.polygons, req.global_area, req.global_enclosure)
+        red_flag_report = [r.red_flag_report for r in flagged if r.red_flag_report]
+    except Exception:  # report layer must never break resolution
+        red_flag_report = []
+
     return GhostResolveResponse(
         resolved_areas=resolved,
         red_flags=red_flags,
         rationale_log=rationale_log,
         sealed_hash=report.sealed_hash,
+        red_flag_report=red_flag_report,
         note="Areas derived via topological residual closure. No pre-computed areas used.",
     )
 
@@ -1051,7 +1064,7 @@ async def certify(claim: Dict[str, Any]):
         raise HTTPException(400, "Claim payload must be a non-empty JSON object.")
     findings = {
         "attested": True,
-        "engine_version": "0.34.0",
+        "engine_version": "0.35.0",
         "axioms": ["Tabula Rasa", "Intrinsic Emergence", "Extrinsic Agnosticism",
                     "Zero Bias", "Full Transparency"],
         "note": "Payload attested as processed through AETHERA's intrinsic pipeline; "

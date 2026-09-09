@@ -1314,6 +1314,67 @@ async def _record_snapshot(gti_result: Dict[str, Any]) -> List[Dict[str, Any]]:
 _MEM_TREND: List[Dict[str, Any]] = []
 
 
+async def _fetch_trend() -> List[Dict[str, Any]]:
+    """Read-only GTI trend fetch (no snapshot write). Falls back to the
+    in-process ring buffer when the DB is unavailable."""
+    try:
+        from aethera.ingest.db import Database
+
+        def _db():
+            with Database() as db:
+                db.cur.execute(_TRUTH_INDEX_TABLE)
+                db.cur.execute(
+                    "SELECT ts, gti, accuracy, coverage, distortion_resistance, "
+                    "residual, mode FROM truth_index_snapshots "
+                    "ORDER BY ts DESC LIMIT 50"
+                )
+                rows = db.cur.fetchall()
+            return [
+                {"ts": r[0], "gti": r[1], "accuracy": r[2], "coverage": r[3],
+                 "distortion_resistance": r[4], "residual": r[5], "mode": r[6]}
+                for r in reversed(rows)
+            ]
+
+        return await asyncio.get_event_loop().run_in_executor(None, _db)
+    except Exception:
+        return list(_MEM_TREND)[-50:]
+
+
+@app.get("/api/truth/index")
+async def truth_index_spec():
+    """Global Truth Index — v35.0 spec shape (Feature 7).
+
+    Returns the aggregate deviation of all legacy maps (Mercator reference)
+    from AETHERA's Physical Truth: {gti, total_physical_area,
+    total_legacy_area, trend_data} plus the signed certificate.
+    """
+    from aethera.truth_index import compute_gti as compute_gti_spec
+    result = await asyncio.get_event_loop().run_in_executor(None, compute_gti_spec)
+    trend = await _fetch_trend()
+    cert = issue_certificate(
+        "global-truth-index",
+        {"projection": result["projection"],
+         "matched_regions": result["matched_regions"]},
+        {"gti": result["gti"],
+         "total_physical_area": result["total_physical_area"],
+         "total_legacy_area": result["total_legacy_area"],
+         "formula": result["formula"]},
+    )
+    return {
+        "gti": result["gti"],
+        "total_physical_area": result["total_physical_area"],
+        "total_legacy_area": result["total_legacy_area"],
+        "trend_data": trend,
+        "total_absolute_deviation_km2": result["total_absolute_deviation_km2"],
+        "matched_regions": result["matched_regions"],
+        "projection": result["projection"],
+        "formula": result["formula"],
+        "per_projection": result["per_projection"],
+        "top_deviations": result["per_region"][:10],
+        "certificate": cert,
+    }
+
+
 @app.get("/api/truth-index")
 async def truth_index():
     """Global Truth Index — current value, components and signed certificate."""

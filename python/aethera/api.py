@@ -53,7 +53,7 @@ app = FastAPI(
     title="AETHERA API",
     description="First objective geometric substrate. No pre-computed areas — "
                 "all areas derived from raw edge lengths + global closure.",
-    version="0.35.0",
+    version="0.36.0",
 )
 
 app.add_middleware(
@@ -222,8 +222,8 @@ async def health():
     from aethera.llm import llm_status
     return {
         "status": "ok",
-        "version": "0.35.0",
-        "platform": "AETHERA v35.0",
+        "version": "0.36.0",
+        "platform": "AETHERA v36.0",
         "mode": DEPLOYMENT_MODE,
         "database": "connected",
         "solver": "rust" if is_rust_available() else "python_fallback",
@@ -758,6 +758,84 @@ async def regions_list():
     return {"regions": list_regions()}
 
 
+# ---- v36.0: derived country boundary geometry -----------------------------
+
+_BOUNDARIES_CACHE: dict = {}
+
+
+def _load_boundary_solution() -> dict:
+    """Load the precomputed intrinsic boundary solution (bundled)."""
+    if _BOUNDARIES_CACHE.get("solution") is None:
+        import json
+        import os
+        path = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "data", "boundaries_solution_v36.json"))
+        with open(path) as f:
+            _BOUNDARIES_CACHE["solution"] = json.load(f)
+    return _BOUNDARIES_CACHE["solution"]
+
+
+@app.get("/api/boundaries/intrinsic")
+async def boundaries_intrinsic():
+    """v36.0 — derived country boundary geometry.
+
+    Every country is a closed polygon reconstructed from globe-agnostic
+    scalar data only: per-edge lengths + walk-frame directions (turtle
+    walk), stitched rigidly across shared border vertices, scaled by a
+    single global area-closure constant and aligned to the platform's own
+    Physical Truth intrinsic layout. No lon/lat, no WGS84, no EPSG, no
+    pre-seeded globe anywhere in the pipeline (Axioms 2-4).
+    """
+    sol = _load_boundary_solution()
+    return {
+        "version": sol["meta"]["version"],
+        "generated_at_utc": sol["meta"]["generated_at_utc"],
+        "resolution": sol["meta"]["resolution"],
+        "principle": sol["meta"]["principle"],
+        "stats": sol["stats"],
+        "countries_count": len(sol["countries"]),
+        "countries": sol["countries"],
+        "no_coordinates": True,
+        "disclaimer": (
+            "DERIVED GEOMETRY: country shapes are reconstructed from "
+            "absolute scalar data (edge lengths, walk directions, declared "
+            "areas) - not from any coordinate system. This is a geometric "
+            "simulation for transparency and analysis; it is not a "
+            "navigational or legal boundary reference."
+        ),
+    }
+
+
+@app.get("/api/boundaries/stats")
+async def boundaries_stats():
+    """v36.0 — boundary ingestion + reconstruction stats (no geometry)."""
+    sol = _load_boundary_solution()
+    ingestion = None
+    try:
+        with Database() as db:
+            db.cur.execute(
+                "SELECT "
+                "(SELECT COUNT(*) FROM points WHERE source='boundary_v36'), "
+                "(SELECT COUNT(*) FROM edges WHERE source='boundary_v36'), "
+                "(SELECT COUNT(*) FROM edges WHERE source='boundary_v36_chord'), "
+                "(SELECT COUNT(*) FROM faces WHERE region='boundary_v36'), "
+                "(SELECT COUNT(*) FROM boundary_edge_walk)"
+            )
+            row = db.cur.fetchone()
+            ingestion = {
+                "points": row[0], "boundary_edges": row[1],
+                "chord_constraints": row[2], "country_faces": row[3],
+                "walk_scalar_rows": row[4],
+            }
+    except Exception as e:
+        ingestion = {"error": str(e)}
+    return {
+        "reconstruction": sol["stats"],
+        "ingestion_db": ingestion,
+        "no_coordinates": True,
+    }
+
+
 @app.get("/api/ghost/antarctica")
 async def ghost_antarctica():
     """Derive Antarctica's area from global closure."""
@@ -1169,7 +1247,7 @@ async def certify(claim: Dict[str, Any]):
         raise HTTPException(400, "Claim payload must be a non-empty JSON object.")
     findings = {
         "attested": True,
-        "engine_version": "0.35.0",
+        "engine_version": "0.36.0",
         "axioms": ["Tabula Rasa", "Intrinsic Emergence", "Extrinsic Agnosticism",
                     "Zero Bias", "Full Transparency"],
         "note": "Payload attested as processed through AETHERA's intrinsic pipeline; "

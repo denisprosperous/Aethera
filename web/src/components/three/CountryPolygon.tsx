@@ -14,6 +14,11 @@
  * (x, y=0, z) via mesh rotation +90° about X; the fill is a planar
  * THREE.Shape (holes supported), borders are fat lines per ring, and the
  * label sits at the largest ring's centroid (clamped inside).
+ *
+ * v37.1: optional onPickPoint — passes the WORLD-space intersection
+ * point of a click so the elevation layer can sample the manifold at
+ * the exact clicked location (converted back to intrinsic units by the
+ * parent, which owns the viewport fit transform).
  */
 
 import { useMemo } from 'react';
@@ -36,6 +41,8 @@ export interface CountryPolygonProps {
   showLabel?: boolean;
   accent?: string;
   onPick?: (name: string) => void;
+  /** v37.1 — click intersection in WORLD space (for elevation sampling). */
+  onPickPoint?: (name: string, worldPoint: [number, number, number]) => void;
   onHover?: (hover: { name: string; area: number; position: [number, number, number] } | null) => void;
 }
 
@@ -62,6 +69,7 @@ export default function CountryPolygon({
   showLabel = true,
   accent = '#00ff88',
   onPick,
+  onPickPoint,
   onHover,
 }: CountryPolygonProps) {
   // ---- Geometry: one Shape per outer ring (holes attached) ------------
@@ -134,7 +142,14 @@ export default function CountryPolygon({
           key={`fill-${i}`}
           geometry={geo}
           rotation={[Math.PI / 2, 0, 0]}
-          onClick={(e) => { e.stopPropagation(); onPick?.(name); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPick?.(name);
+            if (onPickPoint) {
+              const p = e.point;
+              onPickPoint(name, [p.x, p.y, p.z]);
+            }
+          }}
           onPointerOver={(e) => {
             e.stopPropagation();
             if (labelAt) onHover?.({ name, area: areaKm2, position: [labelAt[0], labelAt[1] + 0.4, labelAt[2]] });
@@ -167,9 +182,20 @@ export default function CountryPolygon({
         />
       ))}
 
-      {/* Centred label */}
+      {/* Centred label — click-transparent: v37.2 fix. drei's Html in
+          non-transform mode ignores the pointerEvents PROP, so the outer
+          positioned div must get pointer-events:none via `style` (it
+          spreads into the wrapper). Before this fix the label wrapper
+          captured clicks and swallowed polygon picks (elevation +
+          Truth Panel) beneath it. */}
       {showLabel && labelAt && (
-        <Html position={labelAt} center distanceFactor={22} zIndexRange={[40, 0]}>
+        <Html
+          position={labelAt}
+          center
+          distanceFactor={22}
+          zIndexRange={[40, 0]}
+          style={{ pointerEvents: 'none' }}
+        >
           <div
             style={{
               color: selected || major ? accent : '#a7bccc',

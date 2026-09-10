@@ -17,10 +17,14 @@
  * with crisp borders, heatmap fills and polygon-centred labels. Seed
  * markers are an explicit toggle, off by default.
  *
- * Features: intrinsic ↔ area-preserving modes, heatmap toggles (none /
- * true area / legacy deviation), OrbitControls, hover tooltips, click →
- * region module page, legend panel with live solver + territory stats,
- * and the mandatory prominent disclaimer.
+ * v36.0: derived country boundaries (turtle-walk reconstruction from
+ * globe-agnostic scalars) render as the default geometry layer.
+ *
+ * v37.1: GOOGLE-MAPS-STYLE INTERACTIVITY — InteractiveEarth3D (left-drag
+ * pan, right-drag orbit/tilt, middle/scroll zoom, double-click reset,
+ * zoom meter) plus ELEVATION-ON-CLICK: with the toggle ON, clicking any
+ * point samples the ETOPO1 height above sea level (a per-vertex physical
+ * scalar) via POST /api/elevation. No lon/lat, no WGS84, no EPSG.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -29,6 +33,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import LLMPalette from '@/components/LLMPalette';
 import Disclaimer from '@/components/Disclaimer';
+import ElevationToggle, { type ElevationResult } from '@/components/ElevationToggle';
 import { apiFetch } from '@/lib/api';
 import type {
   EarthSimulation3DData,
@@ -39,6 +44,11 @@ import type {
 const EarthSimulation3D = dynamic(() => import('@/components/three/EarthSimulation3D'), {
   ssr: false,
   loading: () => <ViewportLoading text="initialising WebGL viewport…" />,
+});
+
+const InteractiveEarth3D = dynamic(() => import('@/components/three/InteractiveEarth3D'), {
+  ssr: false,
+  loading: () => <ViewportLoading text="initialising interactive manifold…" />,
 });
 
 function ViewportLoading({ text }: { text: string }) {
@@ -138,6 +148,10 @@ export default function Earth3DPage() {
   // v33.0: territory stats reported by the 3D component (transparency).
   const [renderStats, setRenderStats] = useState<TerritoryRenderStats | null>(null);
   const onRenderStats = useCallback((s: TerritoryRenderStats) => setRenderStats(s), []);
+
+  // v37.1: elevation-on-click state (toggle lives top-right of the viewport).
+  const [elevationOn, setElevationOn] = useState(false);
+  const [elevation, setElevation] = useState<ElevationResult | null>(null);
 
   // v32.0 deep link: /dashboard/earth-3d?region=<Name> focuses that region.
   const [focusRegion, setFocusRegion] = useState<string | null>(null);
@@ -250,11 +264,12 @@ export default function Earth3DPage() {
       <header style={{ marginBottom: '14px' }}>
         <h1 style={{ fontSize: '22px', fontWeight: 300, letterSpacing: '2px' }}>◈ 3D EARTH SIMULATION</h1>
         <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '12px', marginTop: '6px', lineHeight: 1.6 }}>
-          v36.0: every country renders as its DERIVED BOUNDARY — a closed polygon
-          reconstructed from globe-agnostic scalar data (edge lengths + walk-frame
-          directions, stitched across shared borders, closed against declared absolute
-          areas). No pre-seeded shape, no lon/lat, no WGS84, no EPSG. The intrinsic dual
-          view (v33) remains available as a layer.
+          v37.1: GOOGLE-MAPS-STYLE INTERACTIVE MANIFOLD — left-drag pan · right-drag orbit/tilt · middle-drag or
+          scroll zoom · double-click reset. With ELEVATION ON (top-right), clicking any point samples the ETOPO1
+          height above sea level stored as a per-vertex physical scalar. Every country renders as its DERIVED
+          BOUNDARY — a closed polygon reconstructed from globe-agnostic scalar data (edge lengths + walk-frame
+          directions, stitched across shared borders, closed against declared absolute areas). No pre-seeded
+          shape, no lon/lat, no WGS84, no EPSG. The intrinsic dual view (v33) remains available as a layer.
         </p>
       </header>
 
@@ -362,11 +377,36 @@ export default function Earth3DPage() {
         </Group>
       </div>
 
-      <div style={{ height: '580px', margin: '14px 0 16px' }}>
+      <div style={{ height: '580px', margin: '14px 0 16px', position: 'relative' }}>
         {st.loading ? (
           <ViewportLoading text="fetching intrinsic manifold from /api/solve/physical-truth…" />
         ) : st.error || !st.data ? (
           <ViewportLoading text={`⚠ ${st.error || 'manifold unavailable'} — retry shortly`} />
+        ) : controls.geometryMode === 'boundary' && st.boundary ? (
+          <>
+            <InteractiveEarth3D
+              data={st.data}
+              boundaryData={st.boundary}
+              heatmap={controls.heatmap}
+              showLabels={controls.showLabels}
+              labelDensity={controls.showLabels ? controls.labelDensity : 'none'}
+              selectedRegion={resolvedFocus}
+              autoRotate={controls.autoRotate}
+              viewPreset={controls.viewPreset}
+              elevationEnabled={elevationOn}
+              onElevationUpdate={setElevation}
+              onRenderStats={onRenderStats}
+              onRegionClick={(region) =>
+                router.push(`/dashboard/physical-truth?region=${encodeURIComponent(region)}`)
+              }
+              hudSuffix={`RESIDUAL ${st.residual.toExponential(3)}`}
+            />
+            <ElevationToggle
+              enabled={elevationOn}
+              onToggle={(next) => { setElevationOn(next); if (!next) setElevation(null); }}
+              elevation={elevation}
+            />
+          </>
         ) : (
           <EarthSimulation3D
             data={st.data}
@@ -495,6 +535,16 @@ export default function Earth3DPage() {
           layout are placed on a deterministic shelf and disclosed in the stats. This is
           a geometric simulation for transparency and analysis — not a navigational or
           legal boundary reference.
+        </p>
+      )}
+
+      {elevationOn && (
+        <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '11px', marginTop: '12px', lineHeight: 1.6 }}>
+          Elevation disclosure: with the toggle ON, clicking any point of the manifold samples the height above
+          sea level from the ETOPO1 global DEM (1 arc-minute, NGDC/NOAA), ingested as a per-vertex physical
+          SCALAR at the boundary vertices. The sample is resolved by nearest intrinsic vertex (~1 arc-minute
+          ground resolution) and is a terrain/bathymetry estimate — not a survey-grade altitude, geoid model or
+          navigation aid. The DEM&apos;s own coordinates were discarded at ingestion; only the scalar survives.
         </p>
       )}
 

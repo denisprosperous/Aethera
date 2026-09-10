@@ -1,0 +1,92 @@
+{
+ "url": "https://aethera-lime.vercel.app/dashboard/earth-3d",
+ "passed": 17,
+ "failed": 0,
+ "checks": [
+  {
+   "name": "canvas renders",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "canvas size",
+   "ok": true,
+   "detail": "1200x580"
+  },
+  {
+   "name": "interactive manifold HUD",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "country labels visible",
+   "ok": true,
+   "detail": "8 matches"
+  },
+  {
+   "name": "elevation toggle present (OFF default)",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "elevation ON + disclosure",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "HUD shows elevation mode",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "elevation-on-click returns result",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "zoom meter present",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "double-click reset no crash",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "chip: Boundaries (v36)",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "chip: Intrinsic Dual (v33)",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "chip: True Area",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "chip: Deviation from Legacy",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "chip: 3D Orbit",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "chip: 2D Planar",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "chip: Seed Points",
+   "ok": true,
+   "detail": ""
+  }
+ ]
+}

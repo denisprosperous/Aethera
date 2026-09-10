@@ -43,7 +43,14 @@ def compute_area_on_manifold(polygon: Sequence[Sequence[float]], manifold=None) 
             p = coords[idx]
             verts.append([p.x, p.y, p.z])
         else:
-            verts.append([float(v[0]), float(v[1]), float(v[2])])
+            # Accept 2D [[x, y], ...] or 3D [[x, y, z], ...] claims.
+            # Missing components are treated as planar (z = 0), consistent
+            # with the intrinsic embedding where region coordinates live
+            # in the z = 0 plane.
+            x = float(v[0])
+            y = float(v[1]) if len(v) > 1 else 0.0
+            z = float(v[2]) if len(v) > 2 else 0.0
+            verts.append([x, y, z])
 
     n = len(verts)
     if n < 3:
@@ -102,6 +109,10 @@ def verify_claim(claimed_polygon: Sequence[Sequence[float]], nation: str,
     return {
         "true_area": true_area,
         "official_area": official_area,
+        # Explicit km-squared aliases (the embedding is km-scaled via
+        # area-derived edge lengths, so the Newell area is already km²).
+        "true_area_km2": true_area,
+        "official_area_km2": official_area,
         "deviation_percent": deviation * 100.0,
         "valid": deviation < VALID_DEVIATION_THRESHOLD,
         "certificate": generate_certificate(nation, true_area, official_area),

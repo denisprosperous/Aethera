@@ -6,9 +6,15 @@ disclaimer, no globe/sphere assumptions, no code-generation offers).
 
 Primary: NVIDIA NIM free endpoints (https://integrate.api.nvidia.com/v1)
 Default model chain (OpenAI-compatible, no user API key required):
-  1. deepseek-ai/deepseek-v4-flash-0731      (deep reasoning)
-  2. nvidia/nemotron-3.5-lightning-30b-a3b   (fast, reliable)
+  1. nvidia/nemotron-3.5-lightning-30b-a3b   (reliable reasoning; primary)
+  2. deepseek-ai/deepseek-v4-flash-0731      (deep reasoning)
   3. moonshotai/kimi-k3                      (long-context)
+
+v38.0 audit note: the chain order was updated after live verification —
+deepseek-v4-flash and kimi-k3 were observed stalling (no response within
+budget) on the free NIM endpoint, while nemotron-3.5-lightning answered
+correctly. Timeout budgets are sized so the whole chain fits inside the
+Vercel maxDuration window (120 s): 90 + 15 + 15.
 
 Seamless by default: the platform ships with a built-in NVIDIA API key so
 end users never need to enter one. Users may still override the key:
@@ -51,20 +57,24 @@ BACKUP_NVIDIA_API_KEY = os.environ.get(
 )
 
 # Default model chain order. NVIDIA_MODEL pins a single model.
+# v38.0: nemotron-3.5-lightning is FIRST — live-verified reliable.
 NVIDIA_MODEL_CHAIN = [
-    "deepseek-ai/deepseek-v4-flash-0731",
     "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "deepseek-ai/deepseek-v4-flash-0731",
     "moonshotai/kimi-k3",
 ]
 
 # Per-request timeout (seconds). Deep reasoning models can be slow; the
-# chain falls through to the next model on timeout. The first model in
-# the chain (deepseek-v4-flash) gets a shorter budget so that a stalled
-# endpoint does not block the fast fallback models.
-NVIDIA_TIMEOUT_S = int(os.environ.get("NVIDIA_TIMEOUT_S", "60"))
+# chain falls through to the next model on timeout. Budgets are sized so
+# the entire chain (90 + 15 + 15) fits inside the Vercel maxDuration
+# window of 120 s: nemotron needs the long budget (reasoning models burn
+# thinking tokens), while the stall-prone models get short guards so a
+# hung endpoint cannot consume the whole function window.
+NVIDIA_TIMEOUT_S = int(os.environ.get("NVIDIA_TIMEOUT_S", "90"))
 MODEL_TIMEOUT_OVERRIDE = {
     "deepseek-ai/deepseek-v4-flash-0731": int(
-        os.environ.get("DEEPSEEK_TIMEOUT_S", "45"))
+        os.environ.get("DEEPSEEK_TIMEOUT_S", "15")),
+    "moonshotai/kimi-k3": int(os.environ.get("KIMI_TIMEOUT_S", "15")),
 }
 
 
@@ -412,7 +422,7 @@ def query_llm_sync(prompt: str, system_prompt: str = None,
                    api_key: str = None, model: str = None) -> LLMResponse:
     """Query the LLM with fallback chain (synchronous).
 
-    Order: NVIDIA NIM (deepseek-v4-flash → nemotron-3.5-lightning →
+    Order: NVIDIA NIM (nemotron-3.5-lightning → deepseek-v4-flash →
     kimi-k3, with automatic backup key) → GLM-5.2 → DeepSeek → ChatGPT →
     Gemini → Mistral → Local. Returns the first successful response.
     """

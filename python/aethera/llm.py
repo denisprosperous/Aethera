@@ -6,15 +6,18 @@ disclaimer, no globe/sphere assumptions, no code-generation offers).
 
 Primary: NVIDIA NIM free endpoints (https://integrate.api.nvidia.com/v1)
 Default model chain (OpenAI-compatible, no user API key required):
-  1. nvidia/nemotron-3.5-lightning-30b-a3b   (reliable reasoning; primary)
-  2. deepseek-ai/deepseek-v4-flash-0731      (deep reasoning)
-  3. moonshotai/kimi-k3                      (long-context)
+  1. openai/gpt-oss-20b                      (fast, live-verified primary)
+  2. nvidia/nemotron-3.5-lightning-30b-a3b   (reasoning fallback)
+  3. deepseek-ai/deepseek-v4-flash-0731      (stall-guarded)
+  4. moonshotai/kimi-k3                      (stall-guarded)
 
 v38.0 audit note: the chain order was updated after live verification —
 deepseek-v4-flash and kimi-k3 were observed stalling (no response within
 budget) on the free NIM endpoint, while nemotron-3.5-lightning answered
-correctly. Timeout budgets are sized so the whole chain fits inside the
-Vercel maxDuration window (120 s): 90 + 15 + 15.
+correctly but with 30-120 s variance. openai/gpt-oss-20b answered the
+full behaviour-contract prompt in 4-11 s across repeated runs. Timeout
+budgets (60 + 40 + 8 + 8) fit inside the Vercel maxDuration window of
+120 s.
 
 Seamless by default: the platform ships with a built-in NVIDIA API key so
 end users never need to enter one. Users may still override the key:
@@ -57,24 +60,30 @@ BACKUP_NVIDIA_API_KEY = os.environ.get(
 )
 
 # Default model chain order. NVIDIA_MODEL pins a single model.
-# v38.0: nemotron-3.5-lightning is FIRST — live-verified reliable.
+# v38.0 audit: live verification showed deepseek-v4-flash and kimi-k3
+# stalling outright and the reasoning model nemotron-3.5-lightning
+# answering correctly but with 30-120 s variance (too slow for the
+# serverless window on a bad queue). openai/gpt-oss-20b answered the
+# full behaviour-contract prompt in 4-11 s across repeated runs and is
+# therefore PRIMARY. Timeout budgets (60 + 40 + 8 + 8 = 116 s) fit the
+# Vercel maxDuration window of 120 s.
 NVIDIA_MODEL_CHAIN = [
+    "openai/gpt-oss-20b",
     "nvidia/nemotron-3.5-lightning-30b-a3b",
     "deepseek-ai/deepseek-v4-flash-0731",
     "moonshotai/kimi-k3",
 ]
 
 # Per-request timeout (seconds). Deep reasoning models can be slow; the
-# chain falls through to the next model on timeout. Budgets are sized so
-# the entire chain (90 + 15 + 15) fits inside the Vercel maxDuration
-# window of 120 s: nemotron needs the long budget (reasoning models burn
-# thinking tokens), while the stall-prone models get short guards so a
-# hung endpoint cannot consume the whole function window.
-NVIDIA_TIMEOUT_S = int(os.environ.get("NVIDIA_TIMEOUT_S", "90"))
+# chain falls through to the next model on timeout. Stall-prone models
+# get short guards so a hung endpoint cannot consume the function window.
+NVIDIA_TIMEOUT_S = int(os.environ.get("NVIDIA_TIMEOUT_S", "60"))
 MODEL_TIMEOUT_OVERRIDE = {
+    "nvidia/nemotron-3.5-lightning-30b-a3b": int(
+        os.environ.get("NEMOTRON_TIMEOUT_S", "40")),
     "deepseek-ai/deepseek-v4-flash-0731": int(
-        os.environ.get("DEEPSEEK_TIMEOUT_S", "15")),
-    "moonshotai/kimi-k3": int(os.environ.get("KIMI_TIMEOUT_S", "15")),
+        os.environ.get("DEEPSEEK_TIMEOUT_S", "8")),
+    "moonshotai/kimi-k3": int(os.environ.get("KIMI_TIMEOUT_S", "8")),
 }
 
 
@@ -422,9 +431,10 @@ def query_llm_sync(prompt: str, system_prompt: str = None,
                    api_key: str = None, model: str = None) -> LLMResponse:
     """Query the LLM with fallback chain (synchronous).
 
-    Order: NVIDIA NIM (nemotron-3.5-lightning → deepseek-v4-flash →
-    kimi-k3, with automatic backup key) → GLM-5.2 → DeepSeek → ChatGPT →
-    Gemini → Mistral → Local. Returns the first successful response.
+    Order: NVIDIA NIM (gpt-oss-20b → nemotron-3.5-lightning →
+    deepseek-v4-flash → kimi-k3, with automatic backup key) → GLM-5.2 →
+    DeepSeek → ChatGPT → Gemini → Mistral → Local. Returns the first
+    successful response.
     """
     models = [model] if model else None
 

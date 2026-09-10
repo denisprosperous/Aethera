@@ -1,0 +1,29 @@
+name: English-Only Enforcement
+
+# AETHERA v37.1 — the mandate requires every repository artifact (docs,
+# code comments, commit messages, chat responses) to be English-only.
+# This workflow fails any push or pull request that introduces CJK
+# characters into documentation or source files.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for non-English content
+        run: |
+          MATCHES=$(grep -rlP '[\x{4e00}-\x{9fff}]' \
+            --include="*.md" --include="*.txt" \
+            --include="*.py" --include="*.ts" --include="*.tsx" \
+            . 2>/dev/null || true)
+          if [ -n "$MATCHES" ]; then
+            echo "Chinese characters detected in the following files:"
+            echo "$MATCHES"
+            echo "Please use English only."
+            exit 1
+          fi
+          echo "All files are in English."

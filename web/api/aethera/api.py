@@ -53,7 +53,7 @@ app = FastAPI(
     title="AETHERA API",
     description="First objective geometric substrate. No pre-computed areas — "
                 "all areas derived from raw edge lengths + global closure.",
-    version="0.36.0",
+    version="0.37.2",
 )
 
 app.add_middleware(
@@ -222,8 +222,8 @@ async def health():
     from aethera.llm import llm_status
     return {
         "status": "ok",
-        "version": "0.36.0",
-        "platform": "AETHERA v36.0",
+        "version": "0.37.2",
+        "platform": "AETHERA v37.2",
         "mode": DEPLOYMENT_MODE,
         "database": "connected",
         "solver": "rust" if is_rust_available() else "python_fallback",
@@ -819,21 +819,91 @@ async def boundaries_stats():
                 "(SELECT COUNT(*) FROM edges WHERE source='boundary_v36'), "
                 "(SELECT COUNT(*) FROM edges WHERE source='boundary_v36_chord'), "
                 "(SELECT COUNT(*) FROM faces WHERE region='boundary_v36'), "
-                "(SELECT COUNT(*) FROM boundary_edge_walk)"
+                "(SELECT COUNT(*) FROM boundary_edge_walk), "
+                "(SELECT COUNT(*) FROM boundary_vertex_elevation)"
             )
             row = db.cur.fetchone()
             ingestion = {
                 "points": row[0], "boundary_edges": row[1],
                 "chord_constraints": row[2], "country_faces": row[3],
                 "walk_scalar_rows": row[4],
+                "elevation_scalars": row[5],
             }
     except Exception as e:
         ingestion = {"error": str(e)}
     return {
         "reconstruction": sol["stats"],
         "ingestion_db": ingestion,
+        "elevation": _elevation_stats_safe(),
         "no_coordinates": True,
     }
+
+
+# ---- v37.2: elevation on click (ETOPO1 scalars on the intrinsic frame) -----
+
+
+class ElevationRequest(BaseModel):
+    """Intrinsic-frame point. No coordinate system is implied or accepted:
+    (x, y) are the solver's own intrinsic plane units."""
+    x: float
+    y: float
+    z: float = 0.0
+
+
+def _elevation_stats_safe() -> dict:
+    try:
+        from aethera.modules.elevation import stats as elevation_stats
+        return elevation_stats()
+    except Exception as e:
+        return {"available": False, "error": str(e)}
+
+
+@app.post("/api/elevation")
+async def get_elevation(request: ElevationRequest):
+    """v37.2 — elevation-on-click.
+
+    Sample the height above sea level at an intrinsic manifold point.
+    The elevation is a PHYSICAL SCALAR sampled transiently from ETOPO1
+    (1 arc-minute, NGDC/NOAA) at ingestion time and attached to the
+    boundary vertices; the DEM's coordinates were discarded. Resolution:
+    nearest boundary vertex (~1 arc-minute ground spacing).
+
+    The scale-aware coverage guard lives inside the lookup module
+    (v37.2): a point farther than 25% of the world's intrinsic span
+    (min 4,000 units) from any boundary vertex returns
+    "Point outside known manifold" with elevation_m = null — never a
+    far-away vertex's scalar.
+    """
+    from aethera.modules.elevation import is_available, lookup_elevation_by_intrinsic
+
+    if not is_available():
+        return {"error": "Elevation lookup unavailable", "elevation_m": None}
+    hit = lookup_elevation_by_intrinsic(request.x, request.y)
+    if hit is None:
+        # Scale-aware coverage guard tripped: the point is not on the
+        # ingested manifold (honest null, Axiom 5).
+        return {
+            "error": "Point outside known manifold",
+            "elevation_m": None,
+            "coordinates": [request.x, request.y, request.z],
+            "source": "ETOPO1_GLOBAL",
+            "reference": "sea_level",
+        }
+    return {
+        "elevation_m": hit["elevation_m"],
+        "coordinates": [request.x, request.y, request.z],
+        "source": "ETOPO1_GLOBAL",
+        "reference": "sea_level",
+        "nearest_vertex_distance": hit["nearest_distance_units"],
+        "coverage_radius": hit["coverage_radius_units"],
+        "no_coordinates": True,
+    }
+
+
+@app.get("/api/elevation/stats")
+async def elevation_stats_endpoint():
+    """v37.1 — elevation scalar coverage (transparency)."""
+    return _elevation_stats_safe()
 
 
 @app.get("/api/ghost/antarctica")
@@ -1247,7 +1317,7 @@ async def certify(claim: Dict[str, Any]):
         raise HTTPException(400, "Claim payload must be a non-empty JSON object.")
     findings = {
         "attested": True,
-        "engine_version": "0.36.0",
+        "engine_version": "0.37.2",
         "axioms": ["Tabula Rasa", "Intrinsic Emergence", "Extrinsic Agnosticism",
                     "Zero Bias", "Full Transparency"],
         "note": "Payload attested as processed through AETHERA's intrinsic pipeline; "

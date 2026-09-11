@@ -118,11 +118,10 @@ export default function Earth3DPage() {
   const [elevHit, setElevHit] = useState<ElevationHit | null>(null);
 
   // Deep link: /dashboard/earth-3d?region=<Name> → select + zoom.
-  const [focusRegion, setFocusRegion] = useState<string | null>(null);
-  useEffect(() => {
-    const r = new URLSearchParams(window.location.search).get('region');
-    if (r && r.trim()) setFocusRegion(r.trim());
-  }, []);
+  // Read at data-arrival time (not via state) so the value can never be
+  // a stale closure capture from the first render.
+  const focusRegion = () =>
+    (new URLSearchParams(window.location.search).get('region') || '').trim();
 
   useEffect(() => {
     let alive = true;
@@ -156,9 +155,10 @@ export default function Earth3DPage() {
           oceanStats: (j.ocean_stats as Record<string, unknown>) || {},
           version: String(j.version || ''),
         });
-        if (focusRegion) {
+        const focus = focusRegion();
+        if (focus) {
           const hit = countries.find(
-            (c) => c.name.toLowerCase() === focusRegion.toLowerCase());
+            (c) => c.name.toLowerCase() === focus.toLowerCase());
           if (hit) {
             setSelected(hit.name);
             setZoomTarget({ name: hit.name, nonce: Date.now() });

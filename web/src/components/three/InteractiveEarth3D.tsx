@@ -339,11 +339,11 @@ export default function InteractiveEarth3D({
       camera={{
         position: [
           bounds.center.x,
-          bounds.radius * 2.2,
-          bounds.center.z + bounds.radius * 1.7,
+          bounds.radius * 2.9,
+          bounds.center.z + bounds.radius * 2.3,
         ],
         near: 1,
-        far: bounds.radius * 12,
+        far: bounds.radius * 25,
         fov: 42,
       }}
       gl={{ antialias: true, powerPreference: 'high-performance' }}
@@ -425,7 +425,7 @@ export default function InteractiveEarth3D({
         rotateSpeed={0.6}
         panSpeed={0.8}
         minDistance={bounds.radius * 0.02}
-        maxDistance={bounds.radius * 6}
+        maxDistance={bounds.radius * 9}
         maxPolarAngle={Math.PI * 0.49}
         target={[bounds.center.x, 0, bounds.center.z]}
         autoRotate={autoRotate}

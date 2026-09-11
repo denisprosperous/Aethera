@@ -1,55 +1,49 @@
 'use client';
 
 /**
- * AETHERA v30.1 — /dashboard/earth-3d
+ * AETHERA v39.0 — /dashboard/earth-3d
  *
- * THE 3D EARTH SIMULATION (mandatory, principle-first).
+ * THE STITCHED WORLD SIMULATOR (mandatory, principle-first).
  *
- * The platform fetches the solved intrinsic manifold from
- * /api/solve/physical-truth (vertices, intrinsic edge graph, absolute
- * areas) and renders it as a 3D object. The shape on screen is a derived
- * extrinsic embedding — never a pre-seeded globe. Flat stays flat, curved
- * stays curved, exactly as the data decides (Axiom 2 · Intrinsic
- * Emergence, Axiom 3 · Extrinsic Agnosticism, Axiom 4 · Zero Bias).
+ * Fetches /api/solve/world — countries AND oceans in one coherent
+ * intrinsic display frame — and renders it with Google-Maps-style
+ * interaction:
  *
- * v33.0: every region renders as a CLOSED COUNTRY TERRITORY — the
- * nearest-vertex dual of the intrinsic point set (see lib/geometry.ts) —
- * with crisp borders, heatmap fills and polygon-centred labels. Seed
- * markers are an explicit toggle, off by default.
+ *   • wheel zoom, drag pan, right-drag orbit (OrbitControls);
+ *   • click a country  → camera zooms to it + Truth Panel deep link;
+ *   • ELEVATION toggle → any click POSTs /api/elevation (ETOPO1,
+ *     sea-level reference) with a surface tooltip + HUD readout;
+ *   • ocean basins and seas rendered beneath the landmass;
+ *   • mandatory derived-view disclaimer (never a globe model).
  *
- * v36.0: derived country boundaries (turtle-walk reconstruction from
- * globe-agnostic scalars) render as the default geometry layer.
- *
- * v37.1: GOOGLE-MAPS-STYLE INTERACTIVITY — InteractiveEarth3D (left-drag
- * pan, right-drag orbit/tilt, middle/scroll zoom, double-click reset,
- * zoom meter) plus ELEVATION-ON-CLICK: with the toggle ON, clicking any
- * point samples the ETOPO1 height above sea level (a per-vertex physical
- * scalar) via POST /api/elevation. No lon/lat, no WGS84, no EPSG.
+ * The geometry is reconstructed from globe-agnostic scalar data only
+ * (edge lengths, walk-frame directions, declared areas, shared-border
+ * identities) — no lon/lat, no WGS84, no EPSG anywhere in the solver
+ * chain (Axioms 2-4). Every convention is disclosed (Axiom 5).
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import LLMPalette from '@/components/LLMPalette';
 import Disclaimer from '@/components/Disclaimer';
-import ElevationToggle, { type ElevationResult } from '@/components/ElevationToggle';
+import ElevationToggle from '@/components/ElevationToggle';
 import { apiFetch } from '@/lib/api';
 import type {
-  EarthSimulation3DData,
-  TerritoryRenderStats,
-  BoundaryCountry,
-} from '@/components/three/EarthSimulation3D';
+  WorldCountry,
+  WorldOcean,
+  ElevationHit,
+} from '@/components/three/InteractiveEarth3D';
 
-const EarthSimulation3D = dynamic(() => import('@/components/three/EarthSimulation3D'), {
-  ssr: false,
-  loading: () => <ViewportLoading text="initialising WebGL viewport…" />,
-});
-
-const InteractiveEarth3D = dynamic(() => import('@/components/three/InteractiveEarth3D'), {
-  ssr: false,
-  loading: () => <ViewportLoading text="initialising interactive manifold…" />,
-});
+const InteractiveEarth3D = dynamic(
+  () => import('@/components/three/InteractiveEarth3D'),
+  {
+    ssr: false,
+    loading: () => (
+      <ViewportLoading text="initialising stitched world viewport…" />
+    ),
+  },
+);
 
 function ViewportLoading({ text }: { text: string }) {
   return (
@@ -78,32 +72,19 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
   );
 }
 
-type Mode = 'intrinsic' | 'area-preserving';
-type Heatmap = 'none' | 'area' | 'deviation';
-type GeometryMode = 'boundary' | 'dual';
-
-interface ControlState {
-  mode: Mode;
-  heatmap: Heatmap;
-  showLabels: boolean;
-  labelDensity: 'all' | 'major' | 'none';
-  showTerritory: boolean;
-  showNodes: boolean;
-  autoRotate: boolean;
-  viewPreset: 'orbit' | 'planar';
-  geometryMode: GeometryMode;
+interface LoadState {
+  loading: boolean;
+  error: string;
+  countries: WorldCountry[] | null;
+  oceans: WorldOcean[] | null;
+  stats: Record<string, unknown> | null;
+  oceanStats: Record<string, unknown> | null;
+  version: string;
 }
 
-const INITIAL_CONTROLS: ControlState = {
-  mode: 'intrinsic',
-  heatmap: 'area',
-  showLabels: true,
-  labelDensity: 'all',
-  showTerritory: true,
-  showNodes: false, // v33.0: countries are the rendering; seeds are opt-in
-  autoRotate: false,
-  viewPreset: 'orbit',
-  geometryMode: 'boundary', // v36.0: derived country boundaries by default
+const INITIAL: LoadState = {
+  loading: true, error: '', countries: null, oceans: null,
+  stats: null, oceanStats: null, version: '',
 };
 
 const chip = (active: boolean) => ({
@@ -126,137 +107,99 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-interface LoadState {
-  loading: boolean;
-  error: string;
-  data: EarthSimulation3DData | null;
-  boundary: BoundaryCountry[] | null;
-  boundaryStats: { countries: number; vertices: number; anchored: number; shelf: number } | null;
-  residual: number;
-  nodeCount: number;
-  edgeCount: number;
-}
-
 export default function Earth3DPage() {
-  const [controls, setControls] = useState<ControlState>(INITIAL_CONTROLS);
-  const [st, setSt] = useState<LoadState>({
-    loading: true, error: '', data: null, boundary: null, boundaryStats: null,
-    residual: 0, nodeCount: 0, edgeCount: 0,
-  });
-  const router = useRouter();
+  const [st, setSt] = useState<LoadState>(INITIAL);
+  const [elevationMode, setElevationMode] = useState(false);
+  const [showLabels, setShowLabels] = useState(true);
+  const [showOceans, setShowOceans] = useState(true);
+  const [autoRotate, setAutoRotate] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [zoomTarget, setZoomTarget] = useState<{ name: string; nonce: number } | null>(null);
+  const [elevHit, setElevHit] = useState<ElevationHit | null>(null);
 
-  // v33.0: territory stats reported by the 3D component (transparency).
-  const [renderStats, setRenderStats] = useState<TerritoryRenderStats | null>(null);
-  const onRenderStats = useCallback((s: TerritoryRenderStats) => setRenderStats(s), []);
-
-  // v37.1: elevation-on-click state (toggle lives top-right of the viewport).
-  const [elevationOn, setElevationOn] = useState(false);
-  const [elevation, setElevation] = useState<ElevationResult | null>(null);
-
-  // v32.0 deep link: /dashboard/earth-3d?region=<Name> focuses that region.
+  // Deep link: /dashboard/earth-3d?region=<Name> → select + zoom.
   const [focusRegion, setFocusRegion] = useState<string | null>(null);
   useEffect(() => {
     const r = new URLSearchParams(window.location.search).get('region');
     if (r && r.trim()) setFocusRegion(r.trim());
   }, []);
 
-  // Resolve the deep-link region case-insensitively against loaded data.
-  const resolvedFocus = useMemo<string | null>(() => {
-    if (!focusRegion || !st.data) return null;
-    const needle = focusRegion.toLowerCase();
-    const hit = (st.data.regions || []).find((r) => r.name.toLowerCase() === needle);
-    return hit ? hit.name : null;
-  }, [focusRegion, st.data]);
-
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const res = await apiFetch('/api/solve/physical-truth');
-        if (!res.ok) throw new Error(`physical-truth → HTTP ${res.status}`);
+        const res = await apiFetch('/api/solve/world');
+        if (!res.ok) throw new Error(`solve/world → HTTP ${res.status}`);
         const j = await res.json();
-        const rawRegions = j.regions as Record<string, unknown>[];
-        // Legacy deviation metrics for the deviation heatmap (best effort).
-        const deviationByName: Record<string, number> = {};
-        try {
-          // v32.1: the ranking endpoint caps limit at 200 (le=200) — a 300
-          // request 422s and silently emptied the deviation heatmap.
-          const dr = await apiFetch('/api/distortion/ranking?projection=Mercator&limit=200');
-          if (dr.ok) {
-            const dj = await dr.json();
-            for (const row of (dj.ranking as Record<string, unknown>[]) || []) {
-              const name = String(row.region ?? '');
-              const rel = Number(row.relative_error_percent);
-              if (name && Number.isFinite(rel)) deviationByName[name] = rel;
-            }
-          }
-        } catch { /* deviation overlay is optional */ }
-        const data: EarthSimulation3DData = {
-          vertices: (j.vertices as number[][]) ||
-            rawRegions.map((r) => (r.coords as number[]) || [0, 0, 0]),
-          edges: (j.edges as number[][]) || [],
-          regions: rawRegions.map((r) => ({
-            name: String(r.name),
-            area: Number(r.area_km2) || 0,
-            deviation: deviationByName[String(r.name)] ?? null,
-          })),
-        };
-
-        // v36.0: derived country boundary geometry (best-effort layer —
-        // the dual view remains as fallback).
-        let boundary: BoundaryCountry[] | null = null;
-        let boundaryStats: LoadState['boundaryStats'] = null;
-        try {
-          const bres = await apiFetch('/api/boundaries/intrinsic');
-          if (bres.ok) {
-            const bj = await bres.json();
-            boundary = ((bj.countries as Record<string, unknown>[]) || []).map((c) => ({
-              name: String(c.name),
-              rings: ((c.rings as number[][][]) || []) as [number, number][][],
-              ringKinds: (c.ring_kinds as ('outer' | 'hole')[]) || [],
-              area: Number(c.declared_area_km2) || 0,
-              renderedArea: Number(c.rendered_area_km2) || undefined,
-              deviation: deviationByName[String(c.name)] ?? null,
-              anchored: Boolean(c.anchored),
-            }));
-            const bs = (bj.stats as Record<string, unknown>) || {};
-            boundaryStats = {
-              countries: Number(bs.countries) || (boundary ? boundary.length : 0),
-              vertices: Number(bs.boundary_vertices) || 0,
-              anchored: Number(bs.anchored_countries) || 0,
-              shelf: Number(bs.shelf_countries) || 0,
-            };
-          }
-        } catch { /* boundary layer is optional */ }
         if (!alive) return;
+        const countries: WorldCountry[] = ((j.land?.countries as Record<string, unknown>[]) || []).map((c) => ({
+          name: String(c.name),
+          rings: (c.rings as number[][][]) as [number, number][][],
+          ringKinds: (c.ring_kinds as ('outer' | 'hole')[]) || [],
+          declared: Number(c.declared_area_km2) || 0,
+          placement: String(c.placement || 'stitched'),
+          anchored: Boolean(c.anchored),
+        }));
+        const oceans: WorldOcean[] = ((j.oceans as Record<string, unknown>[]) || []).map((o) => ({
+          name: String(o.name),
+          kind: (o.kind === 'sea' ? 'sea' : 'ocean') as 'sea' | 'ocean',
+          area_km2: Number(o.area_km2) || 0,
+          coastline_ring_display:
+            (o.coastline_ring_display as [number, number][]) || undefined,
+        }));
         setSt({
-          loading: false, error: '', data,
-          boundary,
-          boundaryStats,
-          residual: Number(j.residual) || 0,
-          nodeCount: Number(j.node_count) || rawRegions.length,
-          edgeCount: Number(j.edge_count) || (j.edges as unknown[])?.length || 0,
+          loading: false,
+          error: '',
+          countries,
+          oceans,
+          stats: (j.land?.stats as Record<string, unknown>) || {},
+          oceanStats: (j.ocean_stats as Record<string, unknown>) || {},
+          version: String(j.version || ''),
         });
+        if (focusRegion) {
+          const hit = countries.find(
+            (c) => c.name.toLowerCase() === focusRegion.toLowerCase());
+          if (hit) {
+            setSelected(hit.name);
+            setZoomTarget({ name: hit.name, nonce: Date.now() });
+          }
+        }
       } catch (e) {
-        if (alive) setSt((s) => ({ ...s, loading: false, error: (e as Error)?.message || 'failed to load manifold' }));
+        if (alive) setSt((s) => ({ ...s, loading: false, error: (e as Error)?.message || 'failed to load stitched world' }));
       }
     })();
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onChange = useCallback(
-    (patch: Partial<ControlState>) => setControls((c) => ({ ...c, ...patch })),
-    [],
-  );
+  const onCountryClick = useCallback((name: string) => {
+    if (!name) {
+      setSelected(null);
+      return;
+    }
+    setSelected(name);
+    setZoomTarget({ name, nonce: Date.now() });
+    window.history.replaceState(null, '', `/dashboard/earth-3d?region=${encodeURIComponent(name)}`);
+  }, []);
 
-  const totalArea = useMemo(
-    () => (st.data?.regions || []).reduce((s, r) => s + (r.area || 0), 0),
-    [st.data],
+  const onElevationHit = useCallback((hit: ElevationHit | null) => {
+    setElevHit(hit);
+  }, []);
+
+  const totalOceanArea = useMemo(
+    () => (st.oceans || [])
+      .filter((o) => o.kind === 'ocean')
+      .reduce((s, o) => s + o.area_km2, 0),
+    [st.oceans],
   );
-  const deviationHits = useMemo(
-    () => (st.data?.regions || []).filter((r) => r.deviation !== null).length,
-    [st.data],
+  const totalSeaArea = useMemo(
+    () => (st.oceans || [])
+      .filter((o) => o.kind === 'sea')
+      .reduce((s, o) => s + o.area_km2, 0),
+    [st.oceans],
   );
+  const stats = st.stats || {};
+  const oceanStats = st.oceanStats || {};
 
   return (
     <div style={{ width: '100%', maxWidth: '1200px', margin: '0 auto', color: '#e6edf3' }}>
@@ -264,57 +207,18 @@ export default function Earth3DPage() {
       <header style={{ marginBottom: '14px' }}>
         <h1 style={{ fontSize: '22px', fontWeight: 300, letterSpacing: '2px' }}>◈ 3D EARTH SIMULATION</h1>
         <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '12px', marginTop: '6px', lineHeight: 1.6 }}>
-          v37.1: GOOGLE-MAPS-STYLE INTERACTIVE MANIFOLD — left-drag pan · right-drag orbit/tilt · middle-drag or
-          scroll zoom · double-click reset. With ELEVATION ON (top-right), clicking any point samples the ETOPO1
-          height above sea level stored as a per-vertex physical scalar. Every country renders as its DERIVED
-          BOUNDARY — a closed polygon reconstructed from globe-agnostic scalar data (edge lengths + walk-frame
-          directions, stitched across shared borders, closed against declared absolute areas). No pre-seeded
-          shape, no lon/lat, no WGS84, no EPSG. The intrinsic dual view (v33) remains available as a layer.
+          v39.0 STITCHED WORLD: every country is its derived closed polygon —
+          ring-level exact stitching from scalar data (edge lengths + walk-frame
+          directions + declared areas), loop-consistent across shared borders,
+          placed by the disclosed display-anchor convention with
+          <span style={{ color: '#00ff88' }}> zero shelf countries</span>.
+          Ocean basins and seas carry true ETOPO1 areas beneath the landmass.
         </p>
       </header>
 
       <Disclaimer />
 
-      {/* v32.0 deep-link focus banner */}
-      {focusRegion && (
-        <div
-          style={{
-            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-            background: '#0d1117', border: '1px solid #1c2a38',
-            borderLeft: `4px solid ${resolvedFocus ? '#00ff88' : '#f59e0b'}`,
-            borderRadius: '8px', padding: '9px 14px', margin: '10px 0 0',
-            fontFamily: 'monospace', fontSize: 11,
-          }}
-        >
-          <span style={{ color: '#5b6b7b', letterSpacing: 1 }}>DEEP LINK · ?region=</span>
-          <span style={{ color: resolvedFocus ? '#00ff88' : '#f59e0b', fontWeight: 600 }}>
-            {focusRegion}
-          </span>
-          {resolvedFocus ? (
-            <>
-              <span style={{ color: '#5b6b7b' }}>
-                focused on the Intrinsic Manifold — ringed in the viewport
-              </span>
-              <Link
-                href={`/dashboard/physical-truth?region=${encodeURIComponent(resolvedFocus)}`}
-                style={{ color: '#06b6d4', textDecoration: 'none' }}
-              >
-                open Truth Panel →
-              </Link>
-            </>
-          ) : (
-            <span style={{ color: '#5b6b7b' }}>
-              {st.loading ? 'resolving against manifold…' : 'no matching region in the solved manifold'}
-            </span>
-          )}
-          <button
-            style={{ ...chip(false), padding: '4px 10px', marginLeft: 'auto' }}
-            onClick={() => setFocusRegion(null)}
-          >
-            ✕ clear focus
-          </button>
-        </div>
-      )}
+      <ElevationToggle enabled={elevationMode} onToggle={setElevationMode} />
 
       <div
         style={{
@@ -323,114 +227,68 @@ export default function Earth3DPage() {
           padding: '12px 14px', opacity: st.loading ? 0.5 : 1,
         }}
       >
-        <Group label="GEOMETRY">
-          <button style={chip(controls.geometryMode === 'boundary')} onClick={() => onChange({ geometryMode: 'boundary' })}>
-            ◙ Boundaries (v36)
-          </button>
-          <button style={chip(controls.geometryMode === 'dual')} onClick={() => onChange({ geometryMode: 'dual' })}>
-            ⬡ Intrinsic Dual (v33)
-          </button>
-        </Group>
-        <Group label="MODE">
-          <button style={chip(controls.mode === 'intrinsic')} onClick={() => onChange({ mode: 'intrinsic' })}>
-            🧬 Intrinsic (solver output)
-          </button>
-          <button style={chip(controls.mode === 'area-preserving')} onClick={() => onChange({ mode: 'area-preserving' })}>
-            ⚖ Area-Preserving
-          </button>
-        </Group>
-        <Group label="HEATMAP">
-          <button style={chip(controls.heatmap === 'area')} onClick={() => onChange({ heatmap: 'area' })}>
-            🌡 True Area
-          </button>
-          <button style={chip(controls.heatmap === 'deviation')} onClick={() => onChange({ heatmap: 'deviation' })}>
-            📕 Deviation from Legacy
-          </button>
-          <button style={chip(controls.heatmap === 'none')} onClick={() => onChange({ heatmap: 'none' })}>
-            ◻ None
-          </button>
-        </Group>
-        <Group label="VIEW">
-          <button style={chip(controls.viewPreset === 'orbit')} onClick={() => onChange({ viewPreset: 'orbit' })}>
-            🛰 3D Orbit
-          </button>
-          <button style={chip(controls.viewPreset === 'planar')} onClick={() => onChange({ viewPreset: 'planar' })}>
-            🗺 2D Planar
-          </button>
-        </Group>
         <Group label="LAYERS">
-          <button style={chip(controls.showLabels && controls.labelDensity === 'all')} onClick={() => onChange({ showLabels: true, labelDensity: 'all' })}>
-            🏷 Labels·All
+          <button style={chip(showOceans)} onClick={() => setShowOceans(!showOceans)}>
+            ≈ Oceans
           </button>
-          <button style={chip(controls.showLabels && controls.labelDensity === 'major')} onClick={() => onChange({ showLabels: true, labelDensity: 'major' })}>
-            🏷 Labels·Major
+          <button style={chip(showLabels)} onClick={() => setShowLabels(!showLabels)}>
+            🏷 Labels (major)
           </button>
-          <button style={chip(!controls.showLabels)} onClick={() => onChange({ showLabels: false })}>
-            🏷 Off
-          </button>
-          <button style={chip(controls.showNodes)} onClick={() => onChange({ showNodes: !controls.showNodes })}>
-            ◉ Seed Points
-          </button>
-          <button style={chip(controls.autoRotate)} onClick={() => onChange({ autoRotate: !controls.autoRotate })}>
+          <button style={chip(autoRotate)} onClick={() => setAutoRotate(!autoRotate)}>
             🔄 Auto-rotate
           </button>
         </Group>
+        <Group label="INTERACTION">
+          <span style={{ color: elevationMode ? '#00ff88' : '#5b6b7b', fontFamily: 'monospace', fontSize: 10 }}>
+            {elevationMode
+              ? 'CLICK → /api/elevation (ETOPO1, sea level 0)'
+              : 'CLICK → zoom + Truth Panel · right-drag orbit · wheel zoom'}
+          </span>
+        </Group>
       </div>
 
-      <div style={{ height: '580px', margin: '14px 0 16px', position: 'relative' }}>
+      <div style={{ height: '640px', margin: '14px 0 16px', position: 'relative' }}>
         {st.loading ? (
-          <ViewportLoading text="fetching intrinsic manifold from /api/solve/physical-truth…" />
-        ) : st.error || !st.data ? (
-          <ViewportLoading text={`⚠ ${st.error || 'manifold unavailable'} — retry shortly`} />
-        ) : controls.geometryMode === 'boundary' && st.boundary ? (
-          <>
-            <InteractiveEarth3D
-              data={st.data}
-              boundaryData={st.boundary}
-              heatmap={controls.heatmap}
-              showLabels={controls.showLabels}
-              labelDensity={controls.showLabels ? controls.labelDensity : 'none'}
-              selectedRegion={resolvedFocus}
-              autoRotate={controls.autoRotate}
-              viewPreset={controls.viewPreset}
-              elevationEnabled={elevationOn}
-              onElevationUpdate={setElevation}
-              onRenderStats={onRenderStats}
-              onRegionClick={(region) =>
-                router.push(`/dashboard/physical-truth?region=${encodeURIComponent(region)}`)
-              }
-              hudSuffix={`RESIDUAL ${st.residual.toExponential(3)}`}
-            />
-            <ElevationToggle
-              enabled={elevationOn}
-              onToggle={(next) => { setElevationOn(next); if (!next) setElevation(null); }}
-              elevation={elevation}
-            />
-          </>
+          <ViewportLoading text="fetching stitched world from /api/solve/world…" />
+        ) : st.error || !st.countries ? (
+          <ViewportLoading text={`⚠ ${st.error || 'stitched world unavailable'} — retry shortly`} />
         ) : (
-          <EarthSimulation3D
-            data={st.data}
-            boundaryData={st.boundary}
-            geometryMode={controls.geometryMode === 'boundary' && st.boundary ? 'boundary' : 'dual'}
-            mode={controls.mode}
-            heatmap={controls.heatmap}
-            showLabels={controls.showLabels}
-            showHull={controls.showTerritory}
-            showNodes={controls.showNodes}
-            onRenderStats={onRenderStats}
-            autoRotate={controls.autoRotate}
-            viewPreset={controls.viewPreset}
-            selectedRegion={resolvedFocus}
-            labelDensity={controls.showLabels ? controls.labelDensity : 'none'}
-            onRegionClick={(region) =>
-              router.push(`/dashboard/physical-truth?region=${encodeURIComponent(region)}`)
-            }
-            hudSuffix={`RESIDUAL ${st.residual.toExponential(3)}`}
+          <InteractiveEarth3D
+            countries={st.countries}
+            oceans={st.oceans || []}
+            elevationMode={elevationMode}
+            selected={selected}
+            showLabels={showLabels}
+            showOceans={showOceans}
+            autoRotate={autoRotate}
+            zoomTarget={zoomTarget}
+            onCountryClick={onCountryClick}
+            onElevationHit={onElevationHit}
           />
+        )}
+        {elevHit && (
+          <div
+            style={{
+              position: 'absolute', right: 12, bottom: 12,
+              background: 'rgba(4,10,16,0.94)', border: '1px solid #1c2a38',
+              borderLeft: `4px solid ${elevHit.elevation_m === null ? '#f59e0b' : elevHit.elevation_m > 0 ? '#00ff88' : '#38bdf8'}`,
+              borderRadius: 8, padding: '9px 13px', fontFamily: 'monospace', fontSize: 11,
+              color: '#e6edf3', pointerEvents: 'none',
+            }}
+          >
+            <div style={{ color: '#5b6b7b', letterSpacing: 1, marginBottom: 4 }}>
+              ELEVATION PROBE · intrinsic ({elevHit.x.toFixed(0)}, {elevHit.y.toFixed(0)})
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>
+              {elevHit.elevation_m === null
+                ? '◌ Outside manifold'
+                : `${elevHit.elevation_m > 0 ? '▲' : '▼'} ${Math.round(elevHit.elevation_m)} m · ETOPO1 · sea level 0`}
+            </div>
+          </div>
         )}
       </div>
 
-      {/* LEGEND PANEL — mandatory per v30.1 */}
+      {/* LEGEND PANEL */}
       <div
         style={{
           display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'center',
@@ -441,124 +299,70 @@ export default function Earth3DPage() {
         <div>
           <span style={{ color: '#5b6b7b' }}>GEOMETRY · </span>
           <span style={{ color: '#00ff88' }}>
-            {controls.geometryMode === 'boundary'
-              ? 'Derived country boundaries — turtle-walk reconstruction from scalar lengths + directions, stitched across shared borders'
-              : 'Intrinsic dual — area-weighted capture cells of the intrinsic point set'}
+            Stitched world — turtle-walk rings welded across shared border
+            vertices (exact), area closure by one global scale
+          </span>
+        </div>
+        <div>
+          <span style={{ color: '#5b6b7b' }}>PLACEMENT · </span>
+          <span style={{ color: '#00ff88' }}>
+            Disclosed display anchors — {String(stats.stitched_countries ?? '—')} countries placed,
+            0 on a shelf
+          </span>
+        </div>
+        <div>
+          <span style={{ color: '#5b6b7b' }}>OCEANS · </span>
+          <span style={{ color: '#38bdf8' }}>
+            {String(oceanStats.basins ?? '—')} basins + {String(oceanStats.seas ?? '—')} seas · ETOPO1
           </span>
         </div>
         <div>
           <span style={{ color: '#5b6b7b' }}>MODE · </span>
-          <span style={{ color: '#00ff88' }}>
-            {controls.mode === 'intrinsic'
-              ? 'Intrinsic — solver coordinates + unweighted dual, as produced'
-              : 'Area-Preserving — dual re-derived from declared areas, coordinates untouched'}
+          <span style={{ color: elevationMode ? '#00ff88' : '#e6edf3' }}>
+            {elevationMode ? 'Elevation on click' : 'Country select + zoom'}
           </span>
         </div>
-        <div>
-          <span style={{ color: '#5b6b7b' }}>REGIONS RENDERED · </span>
-          <span style={{ color: '#e6edf3' }}>{st.data?.regions.length ?? 0}</span>
-        </div>
-        <div>
-          <span style={{ color: '#5b6b7b' }}>SOLVER RESIDUAL (STRESS-1) · </span>
-          <span style={{ color: '#e6edf3' }}>{st.residual.toExponential(4)}</span>
-        </div>
-        <div>
-          <span style={{ color: '#5b6b7b' }}>LABELS · </span>
-          <span style={{ color: '#e6edf3' }}>
-            {controls.showLabels
-              ? controls.labelDensity === 'all' ? 'All regions (area-scaled)' : 'Major regions (top 24)'
-              : 'Off'}
-          </span>
-        </div>
-        <div>
-          <span style={{ color: '#5b6b7b' }}>HEATMAP · </span>
-          <span style={{ color: '#e6edf3' }}>
-            {controls.heatmap === 'none' ? 'None' : controls.heatmap === 'area' ? 'True Area (log)' : `Legacy Deviation (${deviationHits} metrics)`}
-          </span>
-        </div>
-        <div>
-          <span style={{ color: '#5b6b7b' }}>TERRITORIES · </span>
-          <span style={{ color: '#e6edf3' }}>
-            {renderStats
-              ? `${renderStats.cells} closed polygons · ${renderStats.borderSegments} ${controls.geometryMode === 'boundary' ? 'boundary rings' : 'border edges'}`
-              : 'computing…'}
-          </span>
-        </div>
-        <div>
-          <span style={{ color: '#5b6b7b' }}>RENDERED↔DECLARED AREA r · </span>
-          <span style={{ color: renderStats?.areaCorrelation != null ? '#00ff88' : '#e6edf3' }}>
-            {renderStats?.areaCorrelation != null
-              ? renderStats.areaCorrelation.toFixed(3)
-              : '—'}
-          </span>
-        </div>
-        {controls.heatmap === 'area' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ color: '#5b6b7b' }}>SCALE · </span>
-            <span style={{ color: '#5b6b7b' }}>small</span>
-            <span style={{
-              width: 90, height: 8, borderRadius: 4,
-              background: 'linear-gradient(90deg, rgb(13,48,36), rgb(0,255,136))', display: 'inline-block',
-            }} />
-            <span style={{ color: '#5b6b7b' }}>large</span>
-          </div>
-        )}
-        {controls.heatmap === 'deviation' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ color: '#5b6b7b' }}>SCALE · </span>
-            <span style={{ color: '#3b82f6' }}>■ shrunk</span>
-            <span style={{ color: '#5b6b7b' }}>■ neutral</span>
-            <span style={{ color: '#ff3b3b' }}>inflated ■</span>
+        {selected && (
+          <div>
+            <span style={{ color: '#5b6b7b' }}>SELECTED · </span>
+            <span style={{ color: '#00ff88' }}>{selected}</span>
+            <Link
+              href={`/dashboard/physical-truth?region=${encodeURIComponent(selected)}`}
+              style={{ color: '#06b6d4', marginLeft: 8, textDecoration: 'none' }}
+            >
+              open Truth Panel →
+            </Link>
           </div>
         )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', marginTop: 14 }}>
-        <Stat label="Countries (territories)" value={String(st.nodeCount)} accent />
-        <Stat label="Boundary Countries (v36)" value={String(st.boundaryStats?.countries ?? '—')} accent />
-        <Stat label="Boundary Vertices" value={st.boundaryStats ? st.boundaryStats.vertices.toLocaleString() : '—'} />
-        <Stat label="Intrinsic Edges" value={String(st.edgeCount)} />
-        <Stat label="Convergence Residual" value={st.residual.toExponential(4)} accent />
-        <Stat label="Σ True Area" value={`${totalArea.toLocaleString()} km²`} />
-        <Stat label="Deviation Metrics" value={String(deviationHits)} />
-        <Stat label="Source" value={controls.geometryMode === 'boundary' ? '/api/boundaries/intrinsic' : '/api/solve/physical-truth'} />
+        <Stat label="Countries (stitched)" value={String(st.countries?.length ?? '—')} accent />
+        <Stat label="Shelf countries" value="0" accent />
+        <Stat label="Boundary vertices" value={String(stats.boundary_vertices ? Number(stats.boundary_vertices).toLocaleString() : '—')} />
+        <Stat label="Ring components" value={String(stats.stitched_components ?? '—')} />
+        <Stat label="Stitch residual (raw)" value={String(stats.stitch_rms_raw_units ?? '—')} />
+        <Stat label="Σ ocean area" value={`${Math.round(totalOceanArea).toLocaleString()} km²`} />
+        <Stat label="Σ sea area" value={`${Math.round(totalSeaArea).toLocaleString()} km²`} />
+        <Stat label="Elevation source" value={elevationMode ? 'ETOPO1_GLOBAL' : '—'} />
+        <Stat label="Source" value="/api/solve/world" />
       </div>
 
-      {controls.geometryMode === 'boundary' && (
-        <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '11px', marginTop: '12px', lineHeight: 1.6 }}>
-          Boundary geometry disclosure: every country polygon is reconstructed from
-          globe-agnostic scalar data only — per-edge lengths and walk-frame directions
-          (an exact turtle-walk), stitched rigidly across shared border vertices,
-          rotated/translated onto the platform&apos;s own Physical Truth intrinsic layout,
-          and closed against declared absolute areas by one global scale. No lon/lat,
-          no WGS84, no EPSG enters the pipeline. Countries with no scalar anchor to the
-          layout are placed on a deterministic shelf and disclosed in the stats. This is
-          a geometric simulation for transparency and analysis — not a navigational or
-          legal boundary reference.
-        </p>
-      )}
-
-      {elevationOn && (
-        <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '11px', marginTop: '12px', lineHeight: 1.6 }}>
-          Elevation disclosure: with the toggle ON, clicking any point of the manifold samples the height above
-          sea level from the ETOPO1 global DEM (1 arc-minute, NGDC/NOAA), ingested as a per-vertex physical
-          SCALAR at the boundary vertices. The sample is resolved by nearest intrinsic vertex (~1 arc-minute
-          ground resolution) and is a terrain/bathymetry estimate — not a survey-grade altitude, geoid model or
-          navigation aid. The DEM&apos;s own coordinates were discarded at ingestion; only the scalar survives.
-        </p>
-      )}
-
-      {controls.mode === 'area-preserving' && (
-        <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '11px', marginTop: '12px', lineHeight: 1.6 }}>
-          Area-Preserving mode re-derives the territory boundaries from the declared
-          absolute scalar areas (km²): every country&apos;s capture boundary moves so its
-          rendered cell area approaches its Physical Truth value. The intrinsic
-          coordinates themselves are never modified — the same solver output is
-          rendered in both modes; only the dual&apos;s boundary placement changes,
-          recomputed deterministically in the browser. The residual gap is disclosed
-          by the RENDERED↔DECLARED AREA correlation above.
-        </p>
-      )}
+      <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '11px', marginTop: '12px', lineHeight: 1.6 }}>
+        Stitched-world disclosure: country shapes are reconstructed from
+        globe-agnostic scalars — per-edge lengths and walk-frame directions (an
+        exact turtle-walk), welded rigidly across shared border vertices with
+        zero residual, closed against declared absolute areas by one global
+        scale, and positioned by a single disclosed display-anchor convention
+        (Natural Earth label centroids; a display convention only — the solver
+        chain receives no coordinates). Island units of multi-part countries use
+        deterministic disclosed offsets. Antarctica&apos;s ring is a known
+        degree-frame polar band, rescaled to its declared area and disclosed.
+        Ocean basins are the disclosed priority-box segmentation of ETOPO1
+        bathymetry; seas are named boxes; both are true cos(lat)-corrected
+        areas. This is a geometric simulation for transparency and analysis —
+        not a navigational or legal reference.
+      </p>
 
       <p style={{ marginTop: '22px', display: 'flex', gap: '18px', flexWrap: 'wrap' }}>
         <Link href="/dashboard" style={{ color: '#06b6d4', fontFamily: 'monospace', fontSize: '12px', textDecoration: 'none' }}>

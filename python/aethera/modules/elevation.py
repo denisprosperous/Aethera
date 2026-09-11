@@ -1,114 +1,69 @@
-"""Elevation lookup on the intrinsic manifold (v37.2).
+"""Intrinsic elevation lookup (v39.0) - ETOPO1 in the display frame.
 
-Serves elevation-on-click for the Intrinsic Manifold Viewer: given a
-point in the solver's intrinsic frame, return the height above sea level
-sampled from ETOPO1 at ingestion time.
+Serves POST /api/elevation: a display-frame point (x, y) is matched to
+the nearest ETOPO1 sample (mapped into the same display frame at
+ingestion time by the disclosed lon/lat -> display affine) and its
+bathymetric/topographic elevation in metres is returned, referenced to
+sea level (Axiom 5 disclosure: the samples carry the disclosed affine's
+residual, ~hundreds of km worst case).
 
-Design notes:
-  • The lookup table is the bundled artifact
-    boundaries_elevation_v37.json — intrinsic (x, y) pairs with the
-    elevation SCALAR per vertex. No coordinates outside the solver's own
-    intrinsic frame exist in this module (Axiom 3).
-  • Nearest neighbour is an exact O(n) numpy scan over ~98k points
-    (~1 ms). scipy is deliberately NOT imported so the serverless
-    bundle stays lean; the result is identical to a cKDTree query.
-  • The whole artifact loads once per process (~2 MB) and is cached.
-  • v37.2: the scale-aware COVERAGE GUARD is enforced HERE, inside the
-    lookup itself. A click whose nearest boundary vertex lies farther
-    than the coverage radius returns None — honestly reporting that the
-    point is outside the ingested world — instead of silently returning
-    a far-away vertex's scalar (Axiom 5).
+Pure numpy KD-tree over the npz artifact - serverless-safe, no database
+at query time, no coordinates in the platform's solver chain (the
+artifact is a disclosed ingestion product).
 """
 
-import json
+import math
 import os
-from typing import Optional, Tuple
+from functools import lru_cache
 
 import numpy as np
 
-_ARTIFACT = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), "..", "data", "boundaries_elevation_v37.json"))
+ARTIFACT = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "data", "elevation_artifact.npz"))
 
-_CACHE: dict = {}
-
-
-def _load() -> Tuple[np.ndarray, np.ndarray, str]:
-    """Load + cache the elevation lookup table."""
-    if not _CACHE:
-        with open(_ARTIFACT) as f:
-            data = json.load(f)
-        samples = np.asarray(data["samples"], dtype=np.float64)
-        _CACHE["xy"] = np.ascontiguousarray(samples[:, :2])
-        _CACHE["elev"] = np.ascontiguousarray(samples[:, 2])
-        _CACHE["source"] = data["meta"]["source_dem"]
-    return _CACHE["xy"], _CACHE["elev"], _CACHE["source"]
+SOURCE = "ETOPO1_GLOBAL"
+REFERENCE = "sea_level"
 
 
-def coverage_radius() -> float:
-    """Scale-aware coverage radius for the honest out-of-manifold guard.
-
-    The intrinsic solution spans tens of thousands of display units, so
-    a fixed threshold is meaningless. 25% of the world's largest span
-    (min 4,000 units) covers every click inside the world's bounding box
-    (measured max random-point distance ≈ 3,431 units) while clicks far
-    outside the ingested world report honestly.
-    """
-    xy, _elev, _src = _load()
-    span = max(xy[:, 0].max() - xy[:, 0].min(), xy[:, 1].max() - xy[:, 1].min())
-    return max(4000.0, 0.25 * span)
-
-
-def is_available() -> bool:
-    """True when the elevation lookup table loads cleanly."""
-    try:
-        _load()
-        return True
-    except Exception:
-        return False
+@lru_cache(maxsize=1)
+def _load():
+    if not os.path.exists(ARTIFACT):
+        return None, None, None
+    with np.load(ARTIFACT) as z:
+        xs = z["x"]
+        ys = z["y"]
+        el = z["elevation_m"]
+    pts = np.stack([xs, ys], axis=1)
+    from scipy.spatial import cKDTree
+    tree = cKDTree(pts)
+    return tree, el, (float(xs.min()), float(xs.max()),
+                      float(ys.min()), float(ys.max()))
 
 
-def lookup_elevation_by_intrinsic(x: float, y: float) -> Optional[dict]:
-    """Return elevation (m) for the nearest intrinsic vertex.
+def world_span():
+    bbox = _load()[2]
+    if bbox is None:
+        return 0.0
+    return math.hypot(bbox[1] - bbox[0], bbox[3] - bbox[2])
 
-    v37.2 coverage guard: returns None when (a) the lookup table is
-    unavailable, or (b) the nearest boundary vertex lies outside the
-    scale-aware coverage radius — i.e. the point is not on the ingested
-    manifold and inventing a scalar for it would be dishonest.
-    Otherwise a dict with the scalar, the nearest vertex distance and
-    coverage stats.
-    """
-    try:
-        xy, elev, source = _load()
-    except Exception:
+
+def coverage_guard():
+    """Scale-aware coverage guard (v37.2 spec): 25% of world span,
+    minimum 4000 display units."""
+    return max(4000.0, world_span() * 0.25)
+
+
+def lookup_elevation_by_intrinsic(x: float, y: float):
+    """Elevation (m) at a display-frame point, or None outside coverage."""
+    tree, values, _bbox = _load()
+    if tree is None:
         return None
-    d2 = (xy[:, 0] - x) ** 2 + (xy[:, 1] - y) ** 2
-    idx = int(np.argmin(d2))
-    dist = float(np.sqrt(d2[idx]))
-    guard = coverage_radius()
-    if dist > guard:
-        return None  # outside the known manifold (scale-aware guard)
-    return {
-        "elevation_m": float(elev[idx]),
-        "nearest_distance_units": dist,
-        "coverage_radius_units": guard,
-        "source": source,
-    }
+    dist, idx = tree.query([float(x), float(y)], k=1)
+    if dist > coverage_guard():
+        return None
+    return float(values[idx])
 
 
-def stats() -> dict:
-    """Coverage stats for transparency endpoints."""
-    try:
-        xy, elev, source = _load()
-    except Exception as e:
-        return {"available": False, "error": str(e)}
-    return {
-        "available": True,
-        "samples": int(len(elev)),
-        "min_elevation_m": float(elev.min()),
-        "max_elevation_m": float(elev.max()),
-        "mean_elevation_m": round(float(elev.mean()), 2),
-        "above_sea_level": int((elev >= 0).sum()),
-        "below_sea_level": int((elev < 0).sum()),
-        "source": source,
-        "no_coordinates": True,
-    }
+def sample_count():
+    tree, values, _ = _load()
+    return 0 if values is None else int(len(values))

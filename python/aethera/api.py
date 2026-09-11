@@ -53,7 +53,7 @@ app = FastAPI(
     title="AETHERA API",
     description="First objective geometric substrate. No pre-computed areas — "
                 "all areas derived from raw edge lengths + global closure.",
-    version="0.37.2",
+    version="0.39.0",
 )
 
 app.add_middleware(
@@ -222,8 +222,8 @@ async def health():
     from aethera.llm import llm_status
     return {
         "status": "ok",
-        "version": "0.37.2",
-        "platform": "AETHERA v37.2",
+        "version": "0.39.0",
+        "platform": "AETHERA v39.0",
         "mode": DEPLOYMENT_MODE,
         "database": "connected",
         "solver": "rust" if is_rust_available() else "python_fallback",
@@ -764,12 +764,20 @@ _BOUNDARIES_CACHE: dict = {}
 
 
 def _load_boundary_solution() -> dict:
-    """Load the precomputed intrinsic boundary solution (bundled)."""
+    """Load the precomputed intrinsic boundary solution (bundled).
+
+    v39.0: prefers the STITCHED world solution (ring-level exact BFS
+    stitching, zero shelf countries); falls back to the v36 bundle.
+    """
     if _BOUNDARIES_CACHE.get("solution") is None:
         import json
         import os
         path = os.path.abspath(os.path.join(
-            os.path.dirname(__file__), "data", "boundaries_solution_v36.json"))
+            os.path.dirname(__file__), "data", "boundaries_solution_v39.json"))
+        if not os.path.exists(path):
+            path = os.path.abspath(os.path.join(
+                os.path.dirname(__file__),
+                "data", "boundaries_solution_v36.json"))
         with open(path) as f:
             _BOUNDARIES_CACHE["solution"] = json.load(f)
     return _BOUNDARIES_CACHE["solution"]
@@ -839,71 +847,282 @@ async def boundaries_stats():
     }
 
 
-# ---- v37.2: elevation on click (ETOPO1 scalars on the intrinsic frame) -----
+# ---- v39.0: elevation on click (ETOPO1 artifact in the display frame) -----
 
 
 class ElevationRequest(BaseModel):
     """Intrinsic-frame point. No coordinate system is implied or accepted:
-    (x, y) are the solver's own intrinsic plane units."""
+    (x, y) are the solver's own intrinsic display units."""
     x: float
     y: float
     z: float = 0.0
 
 
 def _elevation_stats_safe() -> dict:
+    """v39.0 — elevation coverage stats from the display-frame artifact."""
     try:
-        from aethera.modules.elevation import stats as elevation_stats
-        return elevation_stats()
+        from aethera.modules.elevation import (
+            coverage_guard, sample_count, SOURCE, REFERENCE,
+        )
+        n = sample_count()
+        return {
+            "available": n > 0,
+            "samples": n,
+            "coverage_guard_display_units": coverage_guard(),
+            "source": SOURCE,
+            "reference": REFERENCE,
+        }
     except Exception as e:
         return {"available": False, "error": str(e)}
 
 
 @app.post("/api/elevation")
 async def get_elevation(request: ElevationRequest):
-    """v37.2 — elevation-on-click.
+    """v39.0 — elevation-on-click on the STITCHED world.
 
-    Sample the height above sea level at an intrinsic manifold point.
-    The elevation is a PHYSICAL SCALAR sampled transiently from ETOPO1
-    (1 arc-minute, NGDC/NOAA) at ingestion time and attached to the
-    boundary vertices; the DEM's coordinates were discarded. Resolution:
-    nearest boundary vertex (~1 arc-minute ground spacing).
-
-    The scale-aware coverage guard lives inside the lookup module
-    (v37.2): a point farther than 25% of the world's intrinsic span
-    (min 4,000 units) from any boundary vertex returns
-    "Point outside known manifold" with elevation_m = null — never a
-    far-away vertex's scalar.
+    A display-frame point (x, y) is matched to the nearest ETOPO1 sample
+    (mapped into the same display frame at ingestion time by the
+    disclosed lon/lat -> display affine; 260,281 samples, land AND
+    bathymetry, referenced to sea level). The scale-aware coverage guard
+    (v37.2 convention, carried forward) lives inside the lookup module:
+    a point farther than 25% of the world's span (min 4,000 units) from
+    any sample returns "Point outside known manifold" with
+    elevation_m = null — never a far-away sample's scalar.
     """
-    from aethera.modules.elevation import is_available, lookup_elevation_by_intrinsic
-
-    if not is_available():
-        return {"error": "Elevation lookup unavailable", "elevation_m": None}
-    hit = lookup_elevation_by_intrinsic(request.x, request.y)
-    if hit is None:
+    try:
+        from aethera.modules.elevation import (
+            lookup_elevation_by_intrinsic, coverage_guard, sample_count,
+            SOURCE, REFERENCE,
+        )
+    except Exception as e:
+        return {"error": f"Elevation lookup unavailable: {e}",
+                "elevation_m": None}
+    e = lookup_elevation_by_intrinsic(request.x, request.y)
+    if e is None:
         # Scale-aware coverage guard tripped: the point is not on the
         # ingested manifold (honest null, Axiom 5).
         return {
             "error": "Point outside known manifold",
             "elevation_m": None,
+            "in_manifold": False,
             "coordinates": [request.x, request.y, request.z],
-            "source": "ETOPO1_GLOBAL",
-            "reference": "sea_level",
+            "x": request.x, "y": request.y, "z": request.z,
+            "source": SOURCE,
+            "reference": REFERENCE,
+            "coverage_guard_display_units": coverage_guard(),
+            "samples": sample_count(),
+            "no_coordinates": True,
         }
     return {
-        "elevation_m": hit["elevation_m"],
+        "elevation_m": e,
+        "in_manifold": True,
         "coordinates": [request.x, request.y, request.z],
-        "source": "ETOPO1_GLOBAL",
-        "reference": "sea_level",
-        "nearest_vertex_distance": hit["nearest_distance_units"],
-        "coverage_radius": hit["coverage_radius_units"],
+        "x": request.x, "y": request.y, "z": request.z,
+        "source": SOURCE,
+        "reference": REFERENCE,
+        "coverage_guard_display_units": coverage_guard(),
+        "samples": sample_count(),
         "no_coordinates": True,
     }
 
 
 @app.get("/api/elevation/stats")
 async def elevation_stats_endpoint():
-    """v37.1 — elevation scalar coverage (transparency)."""
+    """v37.1/v39.0 — elevation coverage (transparency)."""
     return _elevation_stats_safe()
+
+
+# ---------------------------------------------------------------------------
+# v39.0 — stitched world manifold, ocean areas
+# ---------------------------------------------------------------------------
+
+_OCEANS_CACHE: Dict[str, Any] = {"bundle": None}
+
+
+def _load_oceans() -> dict:
+    """Load the precomputed ocean/sea bundle (bundled artifact)."""
+    if _OCEANS_CACHE.get("bundle") is None:
+        path = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "data", "oceans_v39.json"))
+        with open(path) as f:
+            _OCEANS_CACHE["bundle"] = json.load(f)
+    return _OCEANS_CACHE["bundle"]
+
+
+@app.get("/api/solve/world")
+async def solve_world(no_ocean_geometry: bool = Query(False)):
+    """v39.0 — THE STITCHED WORLD MANIFOLD.
+
+    Countries AND oceans in one coherent intrinsic display frame:
+      * land: 242 countries, ring-level exact stitching from scalar data
+        (edge lengths + walk-frame directions + declared areas; shared
+        borders welded, zero shelf countries), served with ring geometry;
+      * oceans: 5 basins + 13 seas with true ETOPO1 areas (cos(lat)
+        corrected) and disclosed coastline rings mapped into the same
+        display frame.
+    No lon/lat, no WGS84, no EPSG anywhere in the solver chain (Axioms
+    2-4); every convention disclosed (Axiom 5).
+    """
+    sol = _load_boundary_solution()
+    oceans = _load_oceans()
+
+    stats = dict(sol["stats"])
+    for k in ("stitch_rms_raw_units", "display_anchor"):
+        if k in sol.get("meta", {}):
+            stats[k] = sol["meta"][k]
+
+    oc = []
+    for o in oceans["oceans"]:
+        rec = {
+            "name": o["name"],
+            "kind": o.get("kind", "ocean"),
+            "area_km2": o["area_km2"],
+        }
+        if o.get("reference_area_km2") is not None:
+            rec["reference_area_km2"] = o["reference_area_km2"]
+        if not no_ocean_geometry:
+            rec["coastline_ring_display"] = o.get("coastline_ring_display") or []
+        oc.append(rec)
+
+    return {
+        "version": sol["meta"]["version"],
+        "generated_at_utc": sol["meta"]["generated_at_utc"],
+        "principle": sol["meta"]["principle"],
+        "display_anchor": sol["meta"].get("display_anchor"),
+        "land": {"stats": stats, "countries": sol["countries"]},
+        "oceans": oc,
+        "ocean_stats": {
+            **oceans.get("stats", {}),
+            "source": oceans["meta"].get("source"),
+            "segmentation": oceans["meta"].get("segmentation"),
+        },
+        "no_coordinates": True,
+        "disclaimer": (
+            "STITCHED WORLD: every country is its derived closed polygon "
+            "reconstructed from absolute scalar data (edge lengths, "
+            "walk-frame directions, declared areas) and welded across "
+            "shared borders; ocean areas are integrated from ETOPO1 "
+            "bathymetry. This is a derived extrinsic embedding of the "
+            "intrinsic manifold - not a globe model, not a navigational "
+            "or legal reference."
+        ),
+    }
+
+
+@app.get("/api/oceans")
+async def oceans_list():
+    """v39.0 — ocean & sea areas (DB-backed, file fallback, no geometry)."""
+    bundle = _load_oceans()
+    ref_map = {o["name"]: o.get("reference_area_km2")
+               for o in bundle["oceans"]}
+    rows = []
+    source = "bundled artifact (oceans_v39.json)"
+    try:
+        with Database() as db:
+            db.cur.execute(
+                "SELECT name, kind, area_km2, reference_area_km2, version "
+                "FROM ocean_areas ORDER BY area_km2 DESC")
+            for r in db.cur.fetchall():
+                rows.append({
+                    "name": r[0], "kind": r[1], "area_km2": r[2],
+                    "reference_area_km2": r[3], "version": r[4],
+                })
+        source = "Neon ocean_areas (v39.0)"
+    except Exception:
+        rows = [{
+            "name": o["name"], "kind": o.get("kind", "ocean"),
+            "area_km2": o["area_km2"],
+            "reference_area_km2": o.get("reference_area_km2"),
+            "version": bundle["meta"]["version"],
+        } for o in bundle["oceans"]]
+    for r in rows:
+        ref = r.get("reference_area_km2") or ref_map.get(r["name"])
+        r["deviation_from_reference_pct"] = (
+            round((r["area_km2"] / ref - 1.0) * 100.0, 2)
+            if ref else None)
+    return {
+        "version": bundle["meta"]["version"],
+        "source_register": source,
+        "method": bundle["meta"].get("source"),
+        "segmentation": bundle["meta"].get("segmentation"),
+        "stats": bundle.get("stats", {}),
+        "oceans": rows,
+        "no_coordinates": True,
+        "disclosure": (
+            "True surface areas integrated from ETOPO1 bathymetry "
+            "(cos(lat) cell correction) under the disclosed priority-box "
+            "segmentation; boxes are conventions, so per-basin deviations "
+            "from classical reference figures are expected and disclosed "
+            "(Axiom 5) - e.g. marginal seas counted separately."
+        ),
+    }
+
+
+@app.post("/api/oceans/compute")
+async def oceans_compute():
+    """v39.0 — trigger the ocean/sea area computation and storage.
+
+    Serverless mode: the full 1-arc-minute ETOPO1 integration runs at
+    ingestion time (python -m aethera.ingest.ingest_oceans - the offline
+    path). This endpoint re-derives the ocean register from the bundled
+    computation artifact, verifies every basin against its reference
+    area (deviations disclosed), and upserts all rows into Neon
+    (ocean_areas) - idempotent.
+    """
+    bundle = _load_oceans()
+    computed = []
+    for o in bundle["oceans"]:
+        ref = o.get("reference_area_km2")
+        computed.append({
+            "name": o["name"],
+            "kind": o.get("kind", "ocean"),
+            "area_km2": o["area_km2"],
+            "reference_area_km2": ref,
+            "deviation_from_reference_pct": (
+                round((o["area_km2"] / ref - 1.0) * 100.0, 2)
+                if ref else None),
+        })
+    stored = 0
+    db_error = None
+    try:
+        with Database() as db:
+            db.cur.execute("""
+                CREATE TABLE IF NOT EXISTS ocean_areas (
+                    name TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    area_km2 DOUBLE PRECISION NOT NULL,
+                    reference_area_km2 DOUBLE PRECISION,
+                    version TEXT NOT NULL
+                )
+            """)
+            db.cur.execute("DELETE FROM ocean_areas")
+            for c in computed:
+                db.cur.execute(
+                    "INSERT INTO ocean_areas (name, kind, area_km2, "
+                    "reference_area_km2, version) VALUES (%s,%s,%s,%s,%s)",
+                    (c["name"], c["kind"], c["area_km2"],
+                     c["reference_area_km2"], "v39.0"))
+        stored = len(computed)
+    except Exception as e:
+        db_error = str(e)
+    basins = [c for c in computed if c["kind"] == "ocean"]
+    seas = [c for c in computed if c["kind"] == "sea"]
+    return {
+        "status": "computed",
+        "version": "v39.0",
+        "method": (
+            "bundled ETOPO1 computation artifact; offline full-resolution "
+            "path: python -m aethera.ingest.ingest_oceans"),
+        "stats": bundle.get("stats", {}),
+        "basins": basins,
+        "seas": seas,
+        "db": {"stored": stored, "error": db_error},
+        "no_coordinates": True,
+        "disclosure": (
+            "Areas are true cos(lat)-corrected ETOPO1 integrations under "
+            "the disclosed priority-box segmentation; per-basin deviations "
+            "from classical reference figures are disclosed, not hidden."),
+    }
 
 
 @app.get("/api/ghost/antarctica")
@@ -1317,7 +1536,7 @@ async def certify(claim: Dict[str, Any]):
         raise HTTPException(400, "Claim payload must be a non-empty JSON object.")
     findings = {
         "attested": True,
-        "engine_version": "0.37.2",
+        "engine_version": "0.39.0",
         "axioms": ["Tabula Rasa", "Intrinsic Emergence", "Extrinsic Agnosticism",
                     "Zero Bias", "Full Transparency"],
         "note": "Payload attested as processed through AETHERA's intrinsic pipeline; "

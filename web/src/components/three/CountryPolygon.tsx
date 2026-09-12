@@ -124,13 +124,13 @@ export default function CountryPolygon({
       cx = (Math.min(...best.pts.map((p) => p[0])) + Math.max(...best.pts.map((p) => p[0]))) / 2;
       cy = (Math.min(...best.pts.map((p) => p[1])) + Math.max(...best.pts.map((p) => p[1]))) / 2;
     }
-    return [cx, 0.06, cy];
+    return [cx, 0.06, -cy];
   }, [rings]);
 
   const borders = useMemo(
     () => rings
       .filter((r) => r.pts.length >= 2)
-      .map((r) => r.pts.map(([x, y]) => [x, 0.02, y] as [number, number, number])),
+      .map((r) => r.pts.map(([x, y]) => [x, 0.02, -y] as [number, number, number])),
     [rings],
   );
 
@@ -141,7 +141,7 @@ export default function CountryPolygon({
         <mesh
           key={`fill-${i}`}
           geometry={geo}
-          rotation={[Math.PI / 2, 0, 0]}
+          rotation={[-Math.PI / 2, 0, 0]}
           onClick={(e) => {
             e.stopPropagation();
             onPick?.(name);

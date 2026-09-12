@@ -279,6 +279,12 @@ def ingest_boundaries(
             # Turtle-walk scalars: per-edge length + direction relative to
             # the ring's own first edge (frame-free rotation scalars).
             # Lengths + turn angles determine the ring exactly (no MDS).
+            # v39.1: the ABSOLUTE first-edge bearing is additionally stored
+            # as a scalar (same scalar class as the relative directions).
+            # It is an orientation, not a position: with it, every ring's
+            # turtle-walk reconstructs in ONE globally consistent source
+            # frame, so the stitched world recovers true inter-country
+            # orientation exactly (no per-component rotations).
             walk = []
             dirs_abs = []
             base_dir = None
@@ -327,7 +333,9 @@ def ingest_boundaries(
                     pb = vtx.coords[key[1]]
                     chord_map[key] = math.sqrt((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2)
 
-            rings_meta.append({"ids": unique_ids, "kind": kind, "walk": walk, "dirs": dirs_abs})
+            rings_meta.append({"ids": unique_ids, "kind": kind,
+                               "walk": walk, "dirs": dirs_abs,
+                               "bearing0": base_dir})
 
         if not rings_meta:
             continue

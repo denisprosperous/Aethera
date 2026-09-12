@@ -1,8 +1,13 @@
 {
- "version": "v39.0",
- "generated_at_utc": "2026-09-11T16:11:09.065391+00:00",
+ "version": "v39.1",
+ "generated_at_utc": "2026-09-12T06:58:05.827142+00:00",
  "samples": 260281,
  "step_deg": 0.5,
- "source": "NOAA ETOPO1 Ice Surface",
- "display_affine_rms_km": 796.6
+ "source": "NOAA ETOPO1 Ice Surface (re-projected from stored lon/lat)",
+ "display_frame": {
+  "type": "anamorphic_cylindrical_km",
+  "x": "KM_PER_DEG * lon * cos(lat)",
+  "y": "KM_PER_DEG * lat",
+  "km_per_deg": 111.194927
+ }
 }

@@ -2,7 +2,7 @@
 fastapi>=0.115
 uvicorn>=0.30
 psycopg2-binary>=2.9
-pyshp>=2.3
+pyshp>=2.3,<3
 requests>=2.31
 numpy>=2.0
 scipy>=1.14

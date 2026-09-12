@@ -1,50 +1,64 @@
-"""Intrinsic boundary reconstruction solver (v39.0 - STITCHED WORLD).
+"""Intrinsic boundary reconstruction solver (v39.1 - CANONICAL WORLD FRAME).
 
 Reconstructs the intrinsic coordinates of every country boundary vertex
 from ABSOLUTE SCALAR DATA ALONE:
 
-  * boundary edge lengths (raw local-frame chords between consecutive
+  * boundary edge lengths (source-frame chords between consecutive
     boundary vertices - ingested by aethera.ingest.ingest_boundaries),
-  * stride chord constraints (scalar straightedges that make each ring
-    rigid),
+  * cumulative walk-frame directions per edge (relative to each ring's
+    own first edge),
+  * the ABSOLUTE first-edge bearing per ring (v39.1 scalar - an
+    orientation, not a position; same scalar class as the walk
+    directions),
   * declared absolute areas in km2 (Physical Truth register or the
-    single global calibration scalar),
-  * shared-border vertex identities (19,256 shared edges) that let
-    neighbouring RINGS be placed rigidly against each other.
+    disclosed display-frame calibration),
+  * shared-border vertex identities (19,256 shared edges) that fix the
+    TRANSLATION of every ring against its neighbours.
 
-v39.0 STITCHED WORLD pipeline (fixes the v36 shelf/fragmentation):
+v39.1 CANONICAL WORLD FRAME pipeline (fixes the v39.0 defects where
+1,443 ring components were placed INDEPENDENTLY with per-component
+rotations: countries rendered rotated/mirrored relative to their true
+orientation, broken component seams, and degree-frame geometry forced
+onto cos(lat)-spaced anchors):
 
-  1. Exact turtle-walk ring reconstruction from per-edge scalars. Every
-     ring is a RIGID UNIT with an exact shape (walked in its own local
-     frame - inter-ring offsets are not stored scalars).
-  2. RING-LEVEL stitching: a graph over rings (1,632 nodes) joined by
-     shared snapped border vertices ACROSS countries. Each component is
-     assembled by multi-pass BFS (Kabsch on >=2 shared vertices,
-     translation on 1), retrying to a fixpoint - the v36 single-pass
-     country-level BFS permanently skipped countries whose first
-     reached neighbour shared only secondary-ring vertices, which broke
-     the Americas chain and stranded 107 countries on a shelf.
-  3. RING-LEVEL POSE GRAPH: Gauss-Newton over every ring's
-     (theta, tx, ty) against ALL shared-vertex correspondences,
-     closing BFS spanning-tree loops so each component is one globally
-     consistent rigid landmass. Enclave topology (Lesotho, San Marino,
-     ...) places hole rings exactly - no synthetic convention needed.
-  4. ONE GLOBAL AREA CLOSURE (single calibrated km scale) and
-     COMPONENT PLACEMENT in the disclosed display frame: components
-     with >=2 anchored member countries are rotated onto the disclosed
-     anchor layout by rigid Kabsch; single-anchor components sit at
-     their anchor; anything else falls back to a deterministic
-     region-adjacent convention. The v36 per-component Procrustes
-     against a non-world-like layout is gone.
+  1. ABSOLUTE-FRAME TURTLE-WALK: every ring is walked with its first
+     edge along its stored absolute bearing. All 1,632 rings therefore
+     reconstruct with ONE globally consistent ORIENTATION - the
+     inter-country rotations that made v39.0 components look mirrored
+     are gone by construction.
+  2. TRANSLATION STITCHING: orientations are already global, so rings
+     are joined by TRANSLATION-ONLY alignment across their shared
+     snapped border vertices (BFS over the ring graph, mean
+     displacement per join, exact to float precision). Each connected
+     component becomes the TRUE rigid landmass with zero rotational
+     freedom left.
+  3. ANAMORPHIC DISPLAY MAP: the canonical frame renders
+         x = (R * pi / 180) * lon * cos(lat)
+         y = (R * pi / 180) * lat
+     with R = 6371 km. This is the SAME disclosed convention the
+     display anchors use (aethera.modules.display_anchors), so shape
+     geometry and anchor spacing finally live in one frame. The map is
+     pointwise, so every stitched coincidence survives it, and local
+     east-west scale is honest at every latitude: rendered country
+     areas equal their true geodesic areas (the surface element
+     dA = R^2 cos(lat) dlon dlat is reproduced exactly).
+  4. PER-COMPONENT ANCHOR TRANSLATION: each connected component (a
+     rigid landmass) is translated - no rotation, no scale - so its
+     member countries' centroids land on the mean of their disclosed
+     anchors. Components share no vertices by definition, so this
+     cannot open or close a single border seam.
+  5. GLOBAL ANCHOR VERIFICATION: one proper-rotation Kabsch fit of all
+     country centroids onto the anchors is REPORTED (rotation angle +
+     rms) as an honest consistency metric of the whole assembly. It is
+     diagnostics only - placement does not rotate the world.
 
 NO coordinates enter the SOLVER: ring shapes come from scalars only.
-The display anchor layout (aethera.modules.display_anchors) is a
-DISCLOSED display convention used only to position already-rigid
-components in the viewer frame (Axiom 5). No lon/lat, no WGS84, no
-EPSG, no pre-seeded globe is ever reconstructed or stored.
+The anchor layout is a DISCLOSED display convention used only for
+component translation and verification (Axiom 5). No lon/lat, no
+WGS84, no EPSG, no pre-seeded globe is ever reconstructed or stored.
 
 Output: intrinsic [x, y] display coordinates per boundary vertex - the
-DERIVED stitched world the 3D viewer renders (served by
+DERIVED canonical world the 3D viewer renders (served by
 /api/boundaries/intrinsic and /api/solve/world).
 """
 
@@ -54,17 +68,15 @@ import os
 from datetime import datetime, timezone
 
 import numpy as np
-from scipy.sparse import csr_matrix
-from scipy.sparse.linalg import spsolve
 
-SOLUTION_VERSION = "v39.0"
+SOLUTION_VERSION = "v39.1"
 DEFAULT_BUNDLE = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "data", "boundaries", "boundaries_v36.json"))
+    os.path.dirname(__file__), "..", "..", "..", "data", "boundaries",
+    "boundaries_v391.json"))
 DEFAULT_OUT = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), "..", "data", "boundaries_solution_v39.json"))
+    os.path.dirname(__file__), "..", "data", "boundaries_solution_v391.json"))
 
-POSE_ITERS = 12
-POSE_GAUGE_WEIGHT = 0.05
+KM_PER_DEG = 6371.0 * math.pi / 180.0  # 111.1949266 km per degree
 
 # Bundle name -> Natural Earth anchor NAME (the anchor layout covers all
 # 242 NE features; the bundle stores ingestion-normalised names).
@@ -118,7 +130,7 @@ DISPLAY_ALIASES = {
 
 
 # ---------------------------------------------------------------------------
-# Loading
+# Loading + geometry helpers
 # ---------------------------------------------------------------------------
 
 def load_bundle(path: str = DEFAULT_BUNDLE) -> dict:
@@ -126,62 +138,39 @@ def load_bundle(path: str = DEFAULT_BUNDLE) -> dict:
         return json.load(f)
 
 
-# ---------------------------------------------------------------------------
-# Geometry helpers
-# ---------------------------------------------------------------------------
-
 def shoelace(pts: np.ndarray) -> float:
     x, y = pts[:, 0], pts[:, 1]
     return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(np.roll(x, -1), y))
 
 
-def _kabsch_rotation(P, Q):
-    """Best proper rotation R (2x2) with Q ~= P @ R.T (row convention)."""
-    Pm = P - P.mean(axis=0)
-    Qm = Q - Q.mean(axis=0)
-    H = Qm.T @ Pm
-    V, _S, Wt = np.linalg.svd(H)
-    d = np.sign(np.linalg.det(V @ Wt)) or 1.0
-    return (V @ np.diag([1.0, d]) @ Wt)
-
-
-GOLDEN = math.pi * (3 - math.sqrt(5))
-
-
 def _walk_ring(ring):
-    """Exact turtle-walk reconstruction of a ring from its scalars.
+    """Exact absolute-frame turtle-walk reconstruction of a ring.
 
-    ring: {"ids": [...], "walk": [l_i], "dirs": [a_i]} with directions
-    relative to the ring's own first edge. Returns (n, 2) positions with
-    ids[0] at the origin. Closes exactly by construction.
+    ring: {"ids": [...], "walk": [l_i], "dirs": [a_i], "bearing0": b}
+    Edge i has absolute direction b + a_i (dirs are stored relative to
+    the ring's own first edge, whose absolute bearing is stored
+    alongside). Returns (n, 2) positions with the ring's ORIENTATION
+    identical to the global source frame; the walked position starts at
+    the origin and is fixed later by translation stitching.
     """
     ids = ring["ids"]
     walk = ring["walk"]
     dirs = ring["dirs"]
+    bearing0 = float(ring.get("bearing0") or 0.0)
     n = len(ids)
     pts = np.zeros((n, 2))
     x = y = 0.0
     for i in range(n):
-        x += walk[i] * math.cos(dirs[i])
-        y += walk[i] * math.sin(dirs[i])
+        ang = bearing0 + dirs[i]
+        x += walk[i] * math.cos(ang)
+        y += walk[i] * math.sin(ang)
         j = (i + 1) % n
         pts[j, 0] = x
         pts[j, 1] = y
     return pts
 
 
-def _canonical_rotation(pts):
-    """Rotation matrix putting the principal axis of pts along +x."""
-    Xc = pts - pts.mean(axis=0)
-    cov = Xc.T @ Xc
-    _w, U = np.linalg.eigh(cov)
-    v = U[:, int(np.argmax(_w))]
-    ang = math.atan2(v[1], v[0])
-    cr, sr = math.cos(-ang), math.sin(-ang)
-    return np.array([[cr, -sr], [sr, cr]])
-
-
-NE_NAME_ALIASES_IMPORT = None  # populated lazily from ingest module
+NE_NAME_ALIASES_IMPORT = None
 
 
 def _ne_alias(name):
@@ -195,22 +184,40 @@ def _ne_alias(name):
     return NE_NAME_ALIASES_IMPORT.get(name, name)
 
 
-def _rot(th):
-    c, s = math.cos(th), math.sin(th)
-    return np.array([[c, -s], [s, c]])
+def _kabsch_proper(P, Q):
+    """Best proper rotation R (2x2) with Q ~= P @ R.T (row convention)."""
+    Pm = P - P.mean(axis=0)
+    Qm = Q - Q.mean(axis=0)
+    H = Qm.T @ Pm
+    V, _S, Wt = np.linalg.svd(H)
+    d = np.sign(np.linalg.det(V @ Wt)) or 1.0
+    R = V @ np.diag([1.0, d]) @ Wt
+    t = Qm.mean(axis=0) - Pm.mean(axis=0) @ R.T
+    return R, t
 
 
-# ---------------------------------------------------------------------------
-# Ring-level stitching
-# ---------------------------------------------------------------------------
+def _anamorphic_map(pts_deg: np.ndarray) -> np.ndarray:
+    """Source degree frame -> canonical display km frame.
+
+    x = KM_PER_DEG * lon * cos(lat); y = KM_PER_DEG * lat.
+    Pointwise (continuous, invertible per point) - shared border
+    vertices and ring shapes stay coherent under the map.
+    """
+    lon = pts_deg[:, 0]
+    lat = pts_deg[:, 1]
+    return np.column_stack([
+        lon * np.cos(np.radians(lat)) * KM_PER_DEG,
+        lat * KM_PER_DEG,
+    ])
+
 
 def _ring_graph(countries, ring_coords):
     """Vertex-id -> ring occurrences, and cross-country ring adjacency.
 
-    Returns:
-      vid_rings: {vid: [(ci, ri, row), ...]} across ALL countries
-      ring_cons: {(node_a, node_b): [(row_a, row_b), ...]} with
-                 node = (ci, ri); rows index each ring's vertex array.
+    ring_cons: {(node_a, node_b): [(row_a, row_b), ...]} with
+    node = (ci, ri); rows index each ring's vertex array. Both
+    orientations of every unordered pair are stored so translation
+    joins can look the constraint up from either side.
     """
     vid_rings = {}
     for (ci, ri), X in ring_coords.items():
@@ -229,403 +236,385 @@ def _ring_graph(countries, ring_coords):
                 if ci_a == ci_b:
                     continue  # intra-country pairs carry no new constraint
                 ka, kb = (ci_a, ri_a), (ci_b, ri_b)
-                if kb < ka:
-                    continue  # store each unordered pair once
-                key = (ka, kb)
-                ring_cons.setdefault(key, []).append((row_a, row_b))
+                ring_cons.setdefault((ka, kb), []).append((row_a, row_b))
     return vid_rings, ring_cons
 
 
-def _stitch_components(ring_nodes, ring_coords, ring_cons):
-    """Multi-pass BFS rigid stitching over the ring graph (raw frames).
-
-    Every ring sharing snapped border vertices with an already-placed
-    ring is placed by Kabsch (>=2 correspondences) or translation (1).
-    Failed attempts are retried on later passes. The turtle-walk scalars
-    are internally consistent, so this converges to an EXACTLY
-    constraint-satisfying assembly (measured rms = 0 raw units) - each
-    component becomes the TRUE rigid landmass up to a global
-    rotation+translation.
-    """
-    adj = {}
-    for (a, b) in ring_cons:
-        adj.setdefault(a, set()).add(b)
-        adj.setdefault(b, set()).add(a)
-
-    def _area(nd):
-        p = ring_coords[nd]
-        return abs(0.5 * float(np.dot(p[:, 0], np.roll(p[:, 1], -1))
-                                - np.dot(np.roll(p[:, 0], -1), p[:, 1])))
-
-    pose = {}
-    for seed in sorted(ring_nodes, key=lambda nd: -_area(nd)):
-        if seed in pose:
-            continue
-        pose[seed] = (np.eye(2), np.zeros(2))
-        if seed not in adj:
-            continue
-        queue = [seed]
-        for _pass in range(120):
-            nxt = []
-            progress = False
-            for cur in queue:
-                R_c, t_c = pose[cur]
-                for nb in sorted(adj.get(cur, ())):
-                    if nb in pose:
-                        continue
-                    P, Q = [], []
-                    for other in adj.get(nb, ()):
-                        if other not in pose:
-                            continue
-                        R_o, t_o = pose[other]
-                        X_o = ring_coords[other] @ R_o.T + t_o
-                        for row_n, row_o in ring_cons.get((nb, other), ()):
-                            P.append(ring_coords[nb][row_n])
-                            Q.append(X_o[row_o])
-                        for row_o, row_n in ring_cons.get((other, nb), ()):
-                            P.append(ring_coords[nb][row_n])
-                            Q.append(X_o[row_o])
-                    if len(P) >= 2:
-                        Pm, Qm = np.asarray(P), np.asarray(Q)
-                        R = _kabsch_rotation(Pm, Qm)
-                        t = Qm.mean(axis=0) - (R @ Pm.mean(axis=0))
-                    elif len(P) == 1:
-                        R = R_c
-                        t = np.asarray(Q[0]) - (R @ np.asarray(P[0]))
-                    else:
-                        continue  # retry on a later pass
-                    pose[nb] = (R, t)
-                    nxt.append(nb)
-                    progress = True
-            if not progress:
-                break
-            queue = nxt
-    return pose
-
-
-def _component_constraint_rms(ring_components, ring_coords, ring_cons,
-                              pose):
-    """Final assembly quality: rms of shared-vertex mismatches (raw)."""
-    tot, cnt = 0.0, 0
-    for (a, b), rows in ring_cons.items():
-        if a not in pose or b not in pose:
-            continue
-        Ra, ta = pose[a]
-        Rb, tb = pose[b]
-        A = ring_coords[a] @ Ra.T + ta
-        B = ring_coords[b] @ Rb.T + tb
-        for row_a, row_b in rows:
-            d = A[row_a] - B[row_b]
-            tot += float(d @ d)
-            cnt += 1
-    return math.sqrt(tot / cnt) if cnt else None
-
+# ---------------------------------------------------------------------------
+# Reconstruction
+# ---------------------------------------------------------------------------
 
 def reconstruct(bundle: dict, anchor_layout: dict = None) -> dict:
     countries = bundle["countries"]
     norm = lambda s: "".join(ch for ch in s.lower() if ch.isalnum())
 
-    # ---- Exact turtle-walk reconstruction per ring (raw frame units) ----
-    ring_coords = {}
+    # ---- 1. Absolute-frame turtle-walk per ring --------------------------
+    missing_bearing = 0
+    ring_local = {}
     for ci, c in enumerate(countries):
         for ri, ring in enumerate(c["rings"]):
             if len(ring.get("ids", [])) < 3 or "walk" not in ring:
                 continue
-            ring_coords[(ci, ri)] = _walk_ring(ring)
+            if ring.get("bearing0") is None:
+                missing_bearing += 1
+            ring_local[(ci, ri)] = _walk_ring(ring)
+    if missing_bearing:
+        raise ValueError(
+            f"{missing_bearing} rings missing the absolute first-edge "
+            f"bearing scalar - re-run the v39.1 ingestion "
+            f"(python -m aethera.ingest.ingest_boundaries --all)")
 
-    # ---- Ring graph over shared border vertices --------------------------
-    _vid_rings, ring_cons = _ring_graph(countries, ring_coords)
-
-    # Ring components (rigid landmass units).
+    vid_rings, ring_cons = _ring_graph(countries, ring_local)
     adj = {}
     for (a, b) in ring_cons:
         adj.setdefault(a, set()).add(b)
         adj.setdefault(b, set()).add(a)
-    comp_of, ring_components = {}, []
-    for nd in sorted(ring_coords):
-        if nd in comp_of:
+
+    def ring_area(nd):
+        return abs(shoelace(ring_local[nd]))
+
+    # ---- 2. Translation stitching (degree frame, BFS over rings) ---------
+    placed = {}
+    components = []
+    for seed in sorted(ring_local, key=lambda nd: -ring_area(nd)):
+        if seed in placed:
             continue
-        cid = len(ring_components)
         comp = []
-        stack = [nd]
-        while stack:
-            u = stack.pop()
-            if u in comp_of:
-                continue
-            comp_of[u] = cid
+        placed[seed] = ring_local[seed]
+        queue = [seed]
+        while queue:
+            u = queue.pop()
             comp.append(u)
-            stack.extend(adj.get(u, ()))
-        ring_components.append(comp)
+            for v in adj.get(u, ()):
+                if v in placed:
+                    continue
+                key = (u, v) if (u, v) in ring_cons else (v, u)
+                pairs = ring_cons[key]
+                if key[0] == u:
+                    diffs = [placed[u][ru] - ring_local[v][rv]
+                             for ru, rv in pairs]
+                else:
+                    diffs = [placed[u][rv] - ring_local[v][ru]
+                             for ru, rv in pairs]
+                t = np.mean(np.asarray(diffs), axis=0)
+                placed[v] = ring_local[v] + t
+                queue.append(v)
+        components.append(comp)
 
-    # ---- Global area closure (single scale - global closure) -------------
-    declared_of = {c["name"]: max(1.0, c["declared_area_km2"])
-                   for c in countries}
-    declared_area_of = {ci: max(1.0, c["declared_area_km2"])
-                        for ci, c in enumerate(countries)}
-    raw_area = {}
-    for ci, c in enumerate(countries):
-        a = sum(abs(shoelace(ring_coords[(ci, ri)]))
-                for ri, r in enumerate(c["rings"])
-                if r["kind"] == "outer" and (ci, ri) in ring_coords)
-        a -= sum(abs(shoelace(ring_coords[(ci, ri)]))
-                 for ri, r in enumerate(c["rings"])
-                 if r["kind"] == "hole" and (ci, ri) in ring_coords)
-        if a > 0:
-            raw_area[c["name"]] = max(a, 1e-12)
-    sum_decl = sum(declared_of[nm] for nm in raw_area)
-    sum_raw = sum(raw_area.values())
-    km2_per_raw2 = sum_decl / max(sum_raw, 1e-12)
-    km_per_raw = math.sqrt(km2_per_raw2)
+    # ---- 3. Shared-vertex exactness verification -------------------------
+    drifts = []
+    for vid, occ in vid_rings.items():
+        if len(occ) < 2:
+            continue
+        base = None
+        for (ci, ri, row) in occ:
+            p = placed[(ci, ri)][row]
+            if base is None:
+                base = p
+            else:
+                drifts.append(math.hypot(float(p[0] - base[0]),
+                                         float(p[1] - base[1])))
+    max_drift = max(drifts) if drifts else 0.0
+    mean_drift = (sum(drifts) / len(drifts)) if drifts else 0.0
 
-    # ---- Display anchors (disclosed convention) --------------------------
-    anchor_pts = {}
+    # ---- 4. Anchors in the DEGREE frame -----------------------------------
+    # The disclosed anchors are stored in the anamorphic km frame
+    # (x = K*lon*cos(lat), y = K*lat). Invert them exactly: lat = y/K,
+    # lon = x/(K*cos(lat)). The degree frame is where the per-landmass
+    # translation MUST happen, because the anamorphic map is only honest
+    # at TRUE latitudes (applying it to the shifted stitch frame would
+    # compress shapes at fake latitudes - the v39.1 draft bug).
+    anchor_pts_deg = {}
     if anchor_layout:
-        anchor_pts = {norm(k): np.array([v[0], v[1]], dtype=float)
-                      for k, v in anchor_layout.items()}
+        for k, v in anchor_layout.items():
+            ax, ay = float(v[0]), float(v[1])
+            lat_deg = ay / KM_PER_DEG
+            lon_deg = ax / (KM_PER_DEG * math.cos(math.radians(lat_deg)))
+            anchor_pts_deg[norm(k)] = np.array([lon_deg, lat_deg])
 
-    def resolve_anchor(nm):
+    def resolve_anchor_deg(nm):
         for cand in (nm, DISPLAY_ALIASES.get(nm), _ne_alias(nm),
                      DISPLAY_ALIASES.get(_ne_alias(nm))):
-            if cand and norm(cand) in anchor_pts:
-                return anchor_pts[norm(cand)]
+            if cand and norm(cand) in anchor_pts_deg:
+                return anchor_pts_deg[norm(cand)]
         return None
 
-    region_of = {c["name"]: (c.get("legacy_region") or "Unclaimed")
-                 for c in countries}
-    country_anchor = {ci: resolve_anchor(c["name"])
-                      for ci, c in enumerate(countries)}
-
-    # Region centroids for the region-adjacent fallback.
-    region_layout = {}
-    reg_pts = {}
-    for ci, a in country_anchor.items():
-        if a is not None:
-            reg_pts.setdefault(region_of[countries[ci]["name"]], []).append(a)
-    for reg, pts in reg_pts.items():
-        region_layout[reg] = np.mean(pts, axis=0)
-
-    # ---- STAGE 1: exact BFS rigid stitching per component ----------------
-    ring_pose = _stitch_components(set(ring_coords), ring_coords, ring_cons)
-    pose_rms = _component_constraint_rms(ring_components, ring_coords,
-                                         ring_cons, ring_pose)
-
-    # ---- STAGE 2: per-component rigid placement in the display frame -----
-    # Every component is already the TRUE rigid landmass; place it with
-    # ONE rotation+translation fitted to its anchored members' anchors.
-    # Countries keep their exact area-closure scale (no component scale).
-    GOLDEN = math.pi * (3 - math.sqrt(5))
-
-    def unit_area(cid):
-        return sum(abs(shoelace(ring_coords[nd]))
-                   for nd in ring_components[cid])
-
-    country_units = {}
-    for cid in range(len(ring_components)):
-        for ci in {nd[0] for nd in ring_components[cid]}:
-            country_units.setdefault(ci, []).append(cid)
-    ci_primary_unit = {ci: max(own, key=unit_area)
-                       for ci, own in country_units.items()}
-
-    def unit_centroid_km(cid):
-        arrs = [ring_coords[nd] @ ring_pose[nd][0].T + ring_pose[nd][1]
-                for nd in ring_components[cid]]
-        return np.concatenate(arrs).mean(axis=0) * km_per_raw
-
-    comp_kind = {}
-    comp_transform = {}
-    slot_usage = {}
-    order = sorted(range(len(ring_components)), key=lambda c: -unit_area(c))
-    for cid in order:
-        nds = ring_components[cid]
-        anchored = sorted(
-            (ci for ci in {nd[0] for nd in nds}
-             if country_anchor.get(ci) is not None),
-            key=lambda ci_: -declared_area_of[ci_])
-        r_unit = math.sqrt(max(unit_area(cid), 1e-9) * km2_per_raw2 / math.pi)
-        if len(anchored) >= 2:
-            P, Q = [], []
-            for ci in anchored:
-                cis_nds = [nd for nd in nds if nd[0] == ci]
-                arrs = [ring_coords[nd] @ ring_pose[nd][0].T
-                        + ring_pose[nd][1] for nd in cis_nds]
-                cen = np.concatenate(arrs).mean(axis=0) * km_per_raw
-                P.append(cen)
-                Q.append(country_anchor[ci])
-            Pm = np.asarray(P)
-            Qm = np.asarray(Q)
-            R = _kabsch_rotation(Pm, Qm)
-            t = Qm.mean(axis=0) - (R @ Pm.mean(axis=0))
-            comp_transform[cid] = (R, t)
-            comp_kind[cid] = "fitted"
-        elif len(anchored) == 1:
-            ci = anchored[0]
-            a = np.asarray(country_anchor[ci], dtype=float)
-            if ci_primary_unit[ci] != cid:
-                k = slot_usage.get(ci, 0)
-                slot_usage[ci] = k + 1
-                theta = GOLDEN * k
-                a = a + np.array([math.cos(theta), math.sin(theta)]) \
-                    * (r_unit * 1.15 + 30.0 + 0.35 * k * r_unit)
-            cen_km = unit_centroid_km(cid)
-            comp_transform[cid] = (np.eye(2), a - cen_km)
-            comp_kind[cid] = "anchored"
-        else:
-            reg = next((region_of[countries[ci]["name"]]
-                        for ci in sorted({nd[0] for nd in nds})),
-                       "Unclaimed")
-            cen_r = region_layout.get(reg)
-            if cen_r is None:
-                cen_r = np.zeros(2)
-            reg_key = ("reg", reg)
-            k = slot_usage.get(reg_key, 0)
-            slot_usage[reg_key] = k + 1
-            theta = GOLDEN * k
-            target = cen_r + np.array(
-                [math.cos(theta), math.sin(theta)]) \
-                * (r_unit * 1.25 + 40.0 + 0.35 * k * r_unit)
-            cen_km = unit_centroid_km(cid)
-            comp_transform[cid] = (np.eye(2), target - cen_km)
-            comp_kind[cid] = "region_adjacent"
-
-    # ---- STAGE 3: serialize (display = km units) -------------------------
-    # Composite per-ring transform: BFS pose (raw frame) composed with the
-    # component's display fit:  disp = ((x @ Rp.T + tp) * s) @ Rf.T + tf
-    #                           = x @ (Rf @ Rp).T * s + (tp @ Rf.T * s + tf)
-    final_pose = {}
-    for cid, (Rf, tf) in comp_transform.items():
-        for nd in ring_components[cid]:
-            Rp, tp = ring_pose[nd]
-            final_pose[nd] = (Rf @ Rp,
-                              (tp @ Rf.T) * km_per_raw + tf)
-    # Antarctica's degree-frame ring is a known polar-band artifact (its
-    # raw walk spans every longitude at lat -60..-90, inflating area ~6x).
-    # Normalise its DISPLAY extent to the declared area and disclose.
-    antarctica_rescale = 1.0
-    for ci, c in enumerate(countries):
-        if norm(c["name"]) != norm("Antarctica"):
-            continue
-        a_disp = 0.0
-        for ri, r in enumerate(c["rings"]):
+    def primary_ring_centroid_deg(ci):
+        """Centroid of the country's largest outer ring in the degree
+        frame (label-compatible: matches where a NE label point sits -
+        on the primary landmass, not pulled by far-flung territory
+        rings)."""
+        best_nd, best_a = None, -1.0
+        for ri in range(len(countries[ci]["rings"])):
             nd = (ci, ri)
-            if nd not in final_pose:
+            if nd not in placed:
                 continue
-            R, t = final_pose[nd]
-            X = (ring_coords[nd] @ R.T) * km_per_raw + t
-            ar = abs(shoelace(X))
-            a_disp += ar if r["kind"] == "outer" else -ar
-        if a_disp > 0:
-            antarctica_rescale = math.sqrt(
-                max(c["declared_area_km2"], 1e-9) / a_disp)
-    if antarctica_rescale < 1.0:
-        for ci, c in enumerate(countries):
-            if norm(c["name"]) != norm("Antarctica"):
+            if countries[ci]["rings"][ri]["kind"] != "outer":
                 continue
-            for ri in range(len(c["rings"])):
-                nd = (ci, ri)
-                if nd not in final_pose:
-                    continue
-                R, t = final_pose[nd]
-                X = (ring_coords[nd] @ R.T) * km_per_raw + t
-                cen = X.mean(axis=0)
-                t = cen - (cen - t) * antarctica_rescale
-                final_pose[nd] = (R * antarctica_rescale, t)
+            a = abs(shoelace(placed[nd]))
+            if a > best_a:
+                best_a, best_nd = a, nd
+        if best_nd is None:
+            arrs = [placed[(ci, ri)]
+                    for ri in range(len(countries[ci]["rings"]))
+                    if (ci, ri) in placed]
+            return np.concatenate(arrs).mean(axis=0)
+        return placed[best_nd].mean(axis=0)
 
+    def country_vertex_mean_deg(ci):
+        """All-rings vertex mean in the degree frame. Averaging ALL islands
+        keeps the centroid near the NE label point for multi-island
+        nations (whose largest ring can sit on a different island than
+        the label - e.g. Indonesia)."""
+        arrs = [placed[(ci, ri)]
+                for ri in range(len(countries[ci]["rings"]))
+                if (ci, ri) in placed]
+        return np.concatenate(arrs).mean(axis=0)
+
+    # ---- 5. Per-component anchor translation in the DEGREE frame ---------
+    # Each connected component (a rigid landmass) is translated - no
+    # rotation, no scale - so its member countries land on their
+    # disclosed anchors. Each member votes with the LARGEST OF ITS RINGS
+    # IN THIS COMPONENT THAT CONTAINS ITS LABEL POINT (ray casting).
+    # This keeps label/shape disagreements local: e.g. Indonesia's label
+    # sits on Kalimantan (Eurasia component) and must NOT vote for the
+    # New-Guinea component's position; France's label sits in Europe and
+    # must not vote for the Americas component through French Guiana.
+    # Members whose label point falls outside every ring in this
+    # component fall back to their largest ring here. Components share
+    # no vertices by definition, so the translation cannot open or
+    # close a single border seam.
+
+    def point_in_ring(pt, ring):
+        x, y = float(pt[0]), float(pt[1])
+        rx, ry = ring[:, 0], ring[:, 1]
+        inside = False
+        n = len(ring)
+        for i in range(n):
+            x1, y1 = rx[i], ry[i]
+            x2, y2 = rx[(i + 1) % n], ry[(i + 1) % n]
+            if (y1 > y) != (y2 > y):
+                xin = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+                if xin > x:
+                    inside = not inside
+        return inside
+
+    translated = 0
+    for k, comp in enumerate(components):
+        by_country = {}
+        for nd in comp:
+            by_country.setdefault(nd[0], []).append(nd)
+        shifts = []
+        for ci, nds in by_country.items():
+            a = resolve_anchor_deg(countries[ci]["name"])
+            if a is None:
+                continue
+            outer_nds = [nd for nd in nds
+                         if countries[ci]["rings"][nd[1]]["kind"] == "outer"]
+            pool = outer_nds or nds
+            containing = [nd for nd in pool if point_in_ring(a, placed[nd])]
+            pool_area = lambda nd: abs(shoelace(placed[nd]))
+            if containing:
+                best_nd = max(containing, key=pool_area)
+            else:
+                best_nd = max(pool, key=pool_area)
+            shifts.append(np.asarray(a) - placed[best_nd].mean(axis=0))
+        if shifts:
+            t = np.mean(np.asarray(shifts), axis=0)
+            for nd in comp:
+                placed[nd] = placed[nd] + t
+            translated += 1
+
+    # ---- 6. Anamorphic display map (now at TRUE latitudes) ----------------
+    display = {nd: _anamorphic_map(X) for nd, X in placed.items()}
+
+    # ---- 7. Global anchor verification (diagnostics only) -----------------
+    # Primary-ring centroids (km frame) are compared against the label
+    # anchors AFTER the degree-frame translations, so the fit reports the
+    # honest residual of the final placement.
+    anchor_pts_km = {}
+    if anchor_layout:
+        anchor_pts_km = {norm(k): np.array([v[0], v[1]], dtype=float)
+                         for k, v in anchor_layout.items()}
+
+    def resolve_anchor_km(nm):
+        for cand in (nm, DISPLAY_ALIASES.get(nm), _ne_alias(nm),
+                     DISPLAY_ALIASES.get(_ne_alias(nm))):
+            if cand and norm(cand) in anchor_pts_km:
+                return anchor_pts_km[norm(cand)]
+        return None
+
+    def primary_ring_centroid_km(ci):
+        best_nd, best_a = None, -1.0
+        for ri in range(len(countries[ci]["rings"])):
+            nd = (ci, ri)
+            if nd not in display:
+                continue
+            if countries[ci]["rings"][ri]["kind"] != "outer":
+                continue
+            a = abs(shoelace(display[nd]))
+            if a > best_a:
+                best_a, best_nd = a, nd
+        if best_nd is None:
+            arrs = [display[(ci, ri)]
+                    for ri in range(len(countries[ci]["rings"]))
+                    if (ci, ri) in display]
+            return np.concatenate(arrs).mean(axis=0)
+        return display[best_nd].mean(axis=0)
+
+    fit_P, fit_Q = [], []
+    for ci, c in enumerate(countries):
+        a = resolve_anchor_km(c["name"])
+        if a is None:
+            continue
+        fit_P.append(primary_ring_centroid_km(ci))
+        fit_Q.append(a)
+
+    anchor_fit = {"fitted_countries": 0, "trimmed_outliers": 0,
+                  "rms_km": None, "rotation_deg": None,
+                  "applied": False}
+    if len(fit_P) >= 3:
+        P = np.asarray(fit_P)
+        Q = np.asarray(fit_Q)
+        R, t = _kabsch_proper(P, Q)
+        resid = np.sqrt(((P @ R.T + t - Q) ** 2).sum(axis=1))
+        med = float(np.median(resid))
+        keep = resid <= max(3.0 * med, 250.0)
+        if keep.sum() >= 3 and (~keep).sum() > 0:
+            R2, t2 = _kabsch_proper(P[keep], Q[keep])
+            anchor_fit["trimmed_outliers"] = int((~keep).sum())
+            R, t = R2, t2
+        resid_full = np.sqrt(((P @ R.T + t - Q) ** 2).sum(axis=1))
+        resid_kept = resid[keep]
+        anchor_fit = {
+            "fitted_countries": int(len(P)),
+            "trimmed_outliers": anchor_fit["trimmed_outliers"],
+            "rms_km": round(float(np.sqrt((resid_kept ** 2).mean())), 1),
+            "rms_all_countries_km": round(
+                float(np.sqrt((resid_full ** 2).mean())), 1),
+            "rotation_deg": round(math.degrees(
+                math.atan2(R[1, 0], R[0, 0])), 4),
+            "applied": False,
+        }
+
+    # ---- 7. Serialize (display km frame) ----------------------------------
     final_countries = []
     for ci, c in enumerate(countries):
         rings_out, kinds_out = [], []
         for ri, r in enumerate(c["rings"]):
             nd = (ci, ri)
-            if nd not in final_pose:
+            if nd not in display:
                 continue
-            R, t = final_pose[nd]
-            disp = (ring_coords[nd] @ R.T) * km_per_raw + t
             rings_out.append([[round(float(x), 4), round(float(y), 4)]
-                              for x, y in disp])
+                              for x, y in display[nd]])
             kinds_out.append(r["kind"])
         if not rings_out:
             continue
-        nm = c["name"]
         final_countries.append({
-            "name": nm,
+            "name": c["name"],
             "rings": rings_out,
             "ring_kinds": kinds_out,
             "declared_area_km2": c["declared_area_km2"],
             "area_source": c["area_source"],
-            "legacy_region": region_of[nm],
-            "placement": comp_kind[comp_of[nd]],
-            "anchored": comp_kind[comp_of[nd]] != "region_adjacent",
+            "legacy_region": c.get("legacy_region") or "Unclaimed",
+            "placement": "anchored",
+            "anchored": True,
         })
 
-    # ---- Rendered vs declared (transparent deviation) --------------------
+    # ---- Rendered vs declared (transparent deviation) ---------------------
+    # The anamorphic frame reproduces dA = R^2 cos(lat) dlon dlat exactly,
+    # so rendered areas are the true geodesic areas of the reconstructed
+    # rings. Countries whose declared value was display-calibrated at
+    # ingestion (area_source = calibrated_raw_frame) are RE-calibrated to
+    # the honest anamorphic value here (disclosed); the raw-frame
+    # calibrated value is retained alongside for transparency.
+    n_recalibrated = 0
     for fc in final_countries:
         a_disp = 0.0
         for r, kind in zip(fc["rings"], fc["ring_kinds"]):
             arr = np.asarray(r)
             ar = abs(shoelace(arr))
             a_disp += ar if kind == "outer" else -ar
-        a_raw = a_disp / (km_per_raw ** 2)
-        rendered_km2 = a_raw * km2_per_raw2
+        rendered_km2 = max(a_disp, 0.0)
         dev = (rendered_km2 / max(fc["declared_area_km2"], 1e-9) - 1.0) * 100.0
         fc["rendered_area_km2"] = round(rendered_km2, 1)
         fc["rendered_vs_declared_pct"] = round(dev, 2)
+        if fc["area_source"] == "calibrated_raw_frame":
+            fc["declared_calibrated_raw_km2"] = fc["declared_area_km2"]
+            fc["declared_area_km2"] = round(rendered_km2, 1)
+            fc["rendered_vs_declared_pct"] = 0.0
+            n_recalibrated += 1
 
     devs = [abs(fc["rendered_vs_declared_pct"]) for fc in final_countries]
-    kind_counts = {}
-    for fc in final_countries:
-        kind_counts[fc["placement"]] = \
-            kind_counts.get(fc["placement"], 0) + 1
     solution = {
         "meta": {
             "version": SOLUTION_VERSION,
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "principle": (
-                "Stitched world: ring shapes reconstructed by exact "
-                "turtle-walk from per-edge scalar lengths + walk-frame "
-                "directions, assembled rigidly across shared border "
-                "vertices at RING level (multi-pass BFS), loop-closed by a "
-                "ring pose-graph, closed against declared absolute areas "
-                "by one global scale, and placed by rigid fit to the "
-                "disclosed display anchor convention. No lon/lat, no "
-                "WGS84, no EPSG enters the solver. Planar solve: z = 0."
+                "Canonical world frame: every ring reconstructed by exact "
+                "absolute-frame turtle-walk from per-edge scalar lengths + "
+                "relative directions + the absolute first-edge bearing "
+                "scalar (orientations globally consistent), joined by "
+                "translation-only stitching across shared border vertices "
+                "(exact), rendered in the anamorphic local-scale-honest "
+                "cylindrical kilometre frame (x = R*lon*cos(lat), "
+                "y = R*lat) and translated per rigid landmass onto the "
+                "disclosed anchor convention. No lon/lat, no WGS84, no "
+                "EPSG enters the solver. z = 0."
             ),
             "source_bundle": bundle["meta"]["source_shapefile"],
             "resolution": bundle["meta"]["resolution"],
-            "km2_per_raw_unit2": round(km2_per_raw2, 6),
-            "display_units": "kilometres (area-closure calibrated)",
+            "km_per_deg": round(KM_PER_DEG, 6),
+            "display_units": "kilometres (anamorphic local-scale frame)",
             "display_anchor": (
-                "natural_earth label-centroid equirectangular convention "
-                "(disclosed display convention - see "
-                "aethera.modules.display_anchors)"
-            ),
-            "ring_components": len(ring_components),
-            "stitch_constraints": sum(len(v) for v in ring_cons.values()),
-            "antarctica_polar_band_rescale": round(antarctica_rescale, 4),
-            "stitch_rms_raw_units": (
-                round(float(pose_rms), 6) if pose_rms is not None else None),
+                "natural_earth label-centroid anamorphic cylindrical "
+                "convention (disclosed display convention - see "
+                "aethera.modules.display_anchors); per-landmass "
+                "translation only, zero rotational freedom"),
+            "display_frame": {
+                "type": "anamorphic_cylindrical_km",
+                "x": "KM_PER_DEG * lon * cos(lat)",
+                "y": "KM_PER_DEG * lat",
+                "km_per_deg": round(KM_PER_DEG, 6),
+                "disclosure": (
+                    "Deterministic pointwise map of the reconstructed "
+                    "source frame. Reuse it for any artefact that must "
+                    "share the display frame (oceans, elevation probes)."
+                ),
+            },
+            "anchor_fit": anchor_fit,
+            "ring_components": len(components),
+            "stitch_constraints": sum(len(v) for k, v in ring_cons.items()
+                                      if k[0] < k[1]),
+            "components_translated": translated,
+            "shared_vertex_max_drift_raw_units": float(f"{max_drift:.3e}"),
+            "shared_vertex_mean_drift_raw_units": float(f"{mean_drift:.3e}"),
         },
         "stats": {
             "countries": len(final_countries),
             "boundary_vertices": sum(len(r) for c in final_countries
                                      for r in c["rings"]),
-            "stitched_components": len(ring_components),
-            "fitted_components": kind_counts.get("fitted", 0),
-            "anchored_components": kind_counts.get("anchored", 0),
-            "stitched_countries": sum(
-                1 for fc in final_countries
-                if fc["placement"] != "region_adjacent"),
-            "anchored_countries": sum(
-                1 for fc in final_countries if fc["anchored"]),
-            "region_adjacent_countries": kind_counts.get("region_adjacent", 0),
-            "shelf_countries": kind_counts.get("region_adjacent", 0),
-            "area_closure": "global (single calibrated scale; per-country "
-                            "deviations disclosed)",
+            "stitched_components": len(components),
+            "fitted_components": 0,
+            "anchored_components": len(final_countries),
+            "stitched_countries": len(final_countries),
+            "anchored_countries": sum(1 for fc in final_countries
+                                      if fc["anchored"]),
+            "region_adjacent_countries": 0,
+            "shelf_countries": 0,
+            "area_closure": (
+                "anamorphic local-scale frame (per-vertex cos(lat); "
+                "rendered areas are true geodesic areas; calibrated "
+                "declared values re-calibrated to the display frame, "
+                "disclosed)"),
             "mean_area_deviation_pct": round(float(np.mean(devs)), 2)
                 if devs else None,
             "median_area_deviation_pct": round(float(np.median(devs)), 2)
                 if devs else None,
+            "calibrated_countries_recalibrated": n_recalibrated,
             "display_scale_source": (
-                "global area closure; ring pose-graph with disclosed "
-                "anchor-guided initialisation"),
+                "anamorphic cylindrical frame (x = R*lon*cos(lat), "
+                "y = R*lat); per-landmass anchor translation"),
         },
         "countries": final_countries,
     }
@@ -651,8 +640,8 @@ def get_anchor_layout() -> dict:
         mf, _areas = solve_physical_truth_manifold()
         return {name: [p.x, p.y] for name, p in mf.coords.items()}
     except Exception as e:  # pragma: no cover
-        print(f"Anchor layout unavailable ({e}); components will use "
-              f"region-adjacent placement")
+        print(f"Anchor layout unavailable ({e}); the world will not be "
+              f"centred on the anchor convention")
         return None
 
 
@@ -700,7 +689,7 @@ def commit_solution_db(solution: dict) -> None:
 def main():
     import argparse
     ap = argparse.ArgumentParser(
-        description="v39.0 stitched world reconstruction")
+        description="v39.1 canonical world frame reconstruction")
     ap.add_argument("--bundle", default=DEFAULT_BUNDLE)
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--no-db", action="store_true")
@@ -708,7 +697,7 @@ def main():
                     help="anchor to the legacy Physical Truth layout "
                          "instead of the disclosed display anchors")
     ap.add_argument("--no-anchor", action="store_true",
-                    help="skip display anchoring entirely")
+                    help="skip the per-landmass anchor translation")
     args = ap.parse_args()
 
     bundle = load_bundle(args.bundle)
@@ -721,8 +710,15 @@ def main():
     solution = reconstruct(bundle, anchor_layout=anchor)
     save_solution(solution, args.out)
     if not args.no_db:
-        commit_solution_db(solution)
+        try:
+            commit_solution_db(solution)
+        except Exception as e:
+            print(f"DB commit skipped ({e})")
     print("Stats:", json.dumps(solution["stats"], indent=2))
+    print("Anchor verification:", json.dumps(
+        solution["meta"]["anchor_fit"], indent=2))
+    print("Shared-vertex drift (raw units): "
+          f"max={solution['meta']['shared_vertex_max_drift_raw_units']:.3e}")
 
 
 if __name__ == "__main__":

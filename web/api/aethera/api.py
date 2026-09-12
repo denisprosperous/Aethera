@@ -53,7 +53,7 @@ app = FastAPI(
     title="AETHERA API",
     description="First objective geometric substrate. No pre-computed areas — "
                 "all areas derived from raw edge lengths + global closure.",
-    version="0.39.0",
+    version="0.39.1",
 )
 
 app.add_middleware(
@@ -222,8 +222,8 @@ async def health():
     from aethera.llm import llm_status
     return {
         "status": "ok",
-        "version": "0.39.0",
-        "platform": "AETHERA v39.0",
+        "version": "0.39.1",
+        "platform": "AETHERA v39.1",
         "mode": DEPLOYMENT_MODE,
         "database": "connected",
         "solver": "rust" if is_rust_available() else "python_fallback",
@@ -766,18 +766,23 @@ _BOUNDARIES_CACHE: dict = {}
 def _load_boundary_solution() -> dict:
     """Load the precomputed intrinsic boundary solution (bundled).
 
-    v39.0: prefers the STITCHED world solution (ring-level exact BFS
-    stitching, zero shelf countries); falls back to the v36 bundle.
+    v39.1: prefers the CANONICAL WORLD FRAME solution (absolute-frame
+    turtle-walk + translation stitching + anamorphic local-scale frame).
+    Falls back to the v39.0 stitched solution, then the v36 bundle.
     """
     if _BOUNDARIES_CACHE.get("solution") is None:
         import json
         import os
-        path = os.path.abspath(os.path.join(
-            os.path.dirname(__file__), "data", "boundaries_solution_v39.json"))
-        if not os.path.exists(path):
-            path = os.path.abspath(os.path.join(
-                os.path.dirname(__file__),
-                "data", "boundaries_solution_v36.json"))
+        candidates = ["boundaries_solution_v391.json",
+                      "boundaries_solution_v39.json",
+                      "boundaries_solution_v36.json"]
+        path = None
+        for name in candidates:
+            p = os.path.abspath(os.path.join(
+                os.path.dirname(__file__), "data", name))
+            if os.path.exists(p):
+                path = p
+                break
         with open(path) as f:
             _BOUNDARIES_CACHE["solution"] = json.load(f)
     return _BOUNDARIES_CACHE["solution"]
@@ -942,8 +947,14 @@ _OCEANS_CACHE: Dict[str, Any] = {"bundle": None}
 def _load_oceans() -> dict:
     """Load the precomputed ocean/sea bundle (bundled artifact)."""
     if _OCEANS_CACHE.get("bundle") is None:
-        path = os.path.abspath(os.path.join(
-            os.path.dirname(__file__), "data", "oceans_v39.json"))
+        candidates = ["oceans_v391.json", "oceans_v39.json"]
+        path = None
+        for name in candidates:
+            p = os.path.abspath(os.path.join(
+                os.path.dirname(__file__), "data", name))
+            if os.path.exists(p):
+                path = p
+                break
         with open(path) as f:
             _OCEANS_CACHE["bundle"] = json.load(f)
     return _OCEANS_CACHE["bundle"]
@@ -1011,38 +1022,33 @@ async def solve_world(no_ocean_geometry: bool = Query(False)):
 
 @app.get("/api/oceans")
 async def oceans_list():
-    """v39.0 — ocean & sea areas (DB-backed, file fallback, no geometry)."""
+    """v39.1 — ocean & sea areas (bundled v39.1 artifact, no geometry)."""
     bundle = _load_oceans()
-    ref_map = {o["name"]: o.get("reference_area_km2")
-               for o in bundle["oceans"]}
-    rows = []
-    source = "bundled artifact (oceans_v39.json)"
+    rows = [{
+        "name": o["name"], "kind": o.get("kind", "ocean"),
+        "area_km2": o["area_km2"],
+        "reference_area_km2": o.get("reference_area_km2"),
+        "version": bundle["meta"]["version"],
+    } for o in bundle["oceans"]]
+    source = f"bundled artifact ({bundle['meta']['version']})"
+    db_note = "Neon ocean_areas register unavailable"
     try:
         with Database() as db:
-            db.cur.execute(
-                "SELECT name, kind, area_km2, reference_area_km2, version "
-                "FROM ocean_areas ORDER BY area_km2 DESC")
-            for r in db.cur.fetchall():
-                rows.append({
-                    "name": r[0], "kind": r[1], "area_km2": r[2],
-                    "reference_area_km2": r[3], "version": r[4],
-                })
-        source = "Neon ocean_areas (v39.0)"
+            db.cur.execute("SELECT COUNT(*) FROM ocean_areas")
+            n = db.cur.fetchone()[0]
+            db_note = (f"{n} rows registered in Neon ocean_areas; "
+                       f"POST /api/oceans/compute re-syncs them")
     except Exception:
-        rows = [{
-            "name": o["name"], "kind": o.get("kind", "ocean"),
-            "area_km2": o["area_km2"],
-            "reference_area_km2": o.get("reference_area_km2"),
-            "version": bundle["meta"]["version"],
-        } for o in bundle["oceans"]]
+        pass
     for r in rows:
-        ref = r.get("reference_area_km2") or ref_map.get(r["name"])
+        ref = r.get("reference_area_km2")
         r["deviation_from_reference_pct"] = (
             round((r["area_km2"] / ref - 1.0) * 100.0, 2)
             if ref else None)
     return {
         "version": bundle["meta"]["version"],
         "source_register": source,
+        "db_register": db_note,
         "method": bundle["meta"].get("source"),
         "segmentation": bundle["meta"].get("segmentation"),
         "stats": bundle.get("stats", {}),
@@ -1050,10 +1056,10 @@ async def oceans_list():
         "no_coordinates": True,
         "disclosure": (
             "True surface areas integrated from ETOPO1 bathymetry "
-            "(cos(lat) cell correction) under the disclosed priority-box "
-            "segmentation; boxes are conventions, so per-basin deviations "
-            "from classical reference figures are expected and disclosed "
-            "(Axiom 5) - e.g. marginal seas counted separately."
+            "under the disclosed priority-box segmentation; boxes are "
+            "conventions, so per-basin deviations from classical "
+            "reference figures are expected and disclosed (Axiom 5) - "
+            "e.g. marginal seas counted separately."
         ),
     }
 
@@ -1101,7 +1107,7 @@ async def oceans_compute():
                     "INSERT INTO ocean_areas (name, kind, area_km2, "
                     "reference_area_km2, version) VALUES (%s,%s,%s,%s,%s)",
                     (c["name"], c["kind"], c["area_km2"],
-                     c["reference_area_km2"], "v39.0"))
+                     c["reference_area_km2"], bundle["meta"]["version"]))
         stored = len(computed)
     except Exception as e:
         db_error = str(e)
@@ -1109,7 +1115,7 @@ async def oceans_compute():
     seas = [c for c in computed if c["kind"] == "sea"]
     return {
         "status": "computed",
-        "version": "v39.0",
+        "version": bundle["meta"]["version"],
         "method": (
             "bundled ETOPO1 computation artifact; offline full-resolution "
             "path: python -m aethera.ingest.ingest_oceans"),
@@ -1536,7 +1542,7 @@ async def certify(claim: Dict[str, Any]):
         raise HTTPException(400, "Claim payload must be a non-empty JSON object.")
     findings = {
         "attested": True,
-        "engine_version": "0.39.0",
+        "engine_version": "0.39.1",
         "axioms": ["Tabula Rasa", "Intrinsic Emergence", "Extrinsic Agnosticism",
                     "Zero Bias", "Full Transparency"],
         "note": "Payload attested as processed through AETHERA's intrinsic pipeline; "

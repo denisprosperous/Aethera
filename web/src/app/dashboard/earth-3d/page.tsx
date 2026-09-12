@@ -207,11 +207,13 @@ export default function Earth3DPage() {
       <header style={{ marginBottom: '14px' }}>
         <h1 style={{ fontSize: '22px', fontWeight: 300, letterSpacing: '2px' }}>◈ 3D EARTH SIMULATION</h1>
         <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '12px', marginTop: '6px', lineHeight: 1.6 }}>
-          v39.0 STITCHED WORLD: every country is its derived closed polygon —
-          ring-level exact stitching from scalar data (edge lengths + walk-frame
-          directions + declared areas), loop-consistent across shared borders,
-          placed by the disclosed display-anchor convention with
-          <span style={{ color: '#00ff88' }}> zero shelf countries</span>.
+          v39.1 CANONICAL WORLD FRAME: every country is its derived closed polygon —
+          absolute-frame turtle-walk from scalar data (edge lengths + walk-frame
+          directions + the first-edge bearing scalar), translation-welded across
+          shared borders with zero residual, rendered in the anamorphic
+          local-scale-honest cylindrical kilometre frame so
+          <span style={{ color: '#00ff88' }}> rendered areas equal true geodesic areas</span>,
+          and placed by the disclosed display-anchor convention.
           Ocean basins and seas carry true ETOPO1 areas beneath the landmass.
         </p>
       </header>
@@ -299,8 +301,8 @@ export default function Earth3DPage() {
         <div>
           <span style={{ color: '#5b6b7b' }}>GEOMETRY · </span>
           <span style={{ color: '#00ff88' }}>
-            Stitched world — turtle-walk rings welded across shared border
-            vertices (exact), area closure by one global scale
+            Canonical world frame — turtle-walk rings welded across shared border
+            vertices (exact), anamorphic local-scale frame (areas = true)
           </span>
         </div>
         <div>
@@ -349,17 +351,19 @@ export default function Earth3DPage() {
       </div>
 
       <p style={{ color: '#5b6b7b', fontFamily: 'monospace', fontSize: '11px', marginTop: '12px', lineHeight: 1.6 }}>
-        Stitched-world disclosure: country shapes are reconstructed from
-        globe-agnostic scalars — per-edge lengths and walk-frame directions (an
-        exact turtle-walk), welded rigidly across shared border vertices with
-        zero residual, closed against declared absolute areas by one global
-        scale, and positioned by a single disclosed display-anchor convention
-        (Natural Earth label centroids; a display convention only — the solver
-        chain receives no coordinates). Island units of multi-part countries use
-        deterministic disclosed offsets. Antarctica&apos;s ring is a known
-        degree-frame polar band, rescaled to its declared area and disclosed.
-        Ocean basins are the disclosed priority-box segmentation of ETOPO1
-        bathymetry; seas are named boxes; both are true cos(lat)-corrected
+        Canonical-world disclosure: country shapes are reconstructed from
+        globe-agnostic scalars — per-edge lengths, walk-frame directions and the
+        absolute first-edge bearing scalar (an exact turtle-walk), welded by
+        translation-only joins across shared border vertices with zero residual,
+        rendered in the anamorphic cylindrical kilometre frame
+        (x = R·lon·cos(lat), y = R·lat — local east-west scale honest at every
+        latitude, so rendered areas equal true geodesic areas), and positioned
+        per rigid landmass by the disclosed display-anchor convention (Natural
+        Earth label centroids; a display convention only — the solver chain
+        receives no coordinates). Antarctica&apos;s ring spans every longitude
+        near the pole: in this cylindrical frame it renders as the standard
+        wide polar band, disclosed. Ocean basins are the disclosed priority-box
+        segmentation of ETOPO1 bathymetry; seas are named boxes; both are true
         areas. This is a geometric simulation for transparency and analysis —
         not a navigational or legal reference.
       </p>

@@ -41,7 +41,7 @@ export default function OceanPolygon({
   return (
     <mesh
       geometry={geometry}
-      rotation={[Math.PI / 2, 0, 0]}
+      rotation={[-Math.PI / 2, 0, 0]}
       position={[0, -0.5, 0]}
       renderOrder={-1}
     >

@@ -82,7 +82,9 @@ function worldBounds(countries: WorldCountry[]) {
   const cx = (minX + maxX) / 2;
   const cz = (minZ + maxZ) / 2;
   const radius = Math.max(maxX - minX, maxZ - minZ) / 2;
-  return { center: new THREE.Vector3(cx, 0, cz), radius: radius || 1000 };
+  // Scene embedding: display north (+y) maps to scene -z so the +z camera
+  // reads the map north-up (see CountryPolygon rotation -pi/2).
+  return { center: new THREE.Vector3(cx, 0, -cz), radius: radius || 1000 };
 }
 
 function centroid3D(c: WorldCountry): [number, number, number] {
@@ -90,7 +92,7 @@ function centroid3D(c: WorldCountry): [number, number, number] {
   let best = 0, bx = 0, bz = 0, bn = 0;
   for (const r of c.rings) {
     for (const [x, y] of r) {
-      sx += x; sz += y; n += 1;
+      sx += x; sz += -y; n += 1;
     }
     const area = Math.abs(polyArea(r));
     if (area > best) {
@@ -101,7 +103,7 @@ function centroid3D(c: WorldCountry): [number, number, number] {
     }
   }
   void sx; void sz; void n; void bn;
-  return [bx, 0, bz];
+  return [bx, 0, -bz];
 }
 
 function polyArea(r: [number, number][]): number {
@@ -117,11 +119,44 @@ function boundingRadius(c: WorldCountry): number {
   let r = 10;
   for (const ring of c.rings) {
     for (const [x, y] of ring) {
-      const d = Math.hypot(x - cx, y - cz);
+      const d = Math.hypot(x - cx, -y - cz);
       if (d > r) r = d;
     }
   }
   return r;
+}
+
+/** Aspect-aware initial camera fit (runs inside the Canvas, AFTER
+ * OrbitControls so it wins the first update tick). */
+function CameraRig({
+  bounds,
+  fitDistance,
+  controlsRef,
+}: {
+  bounds: { center: THREE.Vector3; radius: number };
+  fitDistance: (aspect: number) => number;
+  controlsRef: React.MutableRefObject<OrbitControlsImpl | null>;
+}) {
+  const { camera, size } = useThree();
+  useEffect(() => {
+    const aspect = size.width / Math.max(size.height, 1);
+    const d = fitDistance(aspect);
+    const dir = new THREE.Vector3(0, 0.78, 0.63).normalize();
+    camera.position.copy(bounds.center).add(dir.multiplyScalar(d));
+    camera.up.set(0, 1, 0);
+    camera.lookAt(bounds.center);
+    if ('far' in camera) {
+      camera.near = 1;
+      camera.far = d * 30;
+      camera.updateProjectionMatrix();
+    }
+    if (controlsRef.current) {
+      controlsRef.current.target.copy(bounds.center);
+      controlsRef.current.update();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [camera, size.width, size.height, bounds.center.x, bounds.radius]);
+  return null;
 }
 
 /** Camera flight: eased zoom to a country or back to the world view. */
@@ -193,7 +228,7 @@ function ElevationProbe({
       if (!hit) return;
       busy.current = true;
       const x = hit.point.x;
-      const y = hit.point.z;
+      const y = -hit.point.z;
       onElevationHit?.({ x, y, elevation_m: null, in_manifold: true });
       try {
         const res = await fetch('/api/elevation', {
@@ -235,7 +270,7 @@ function ElevationMarker({ hit }: { hit: ElevationHit | null }) {
       ? '#00ff88'
       : '#38bdf8';
   return (
-    <group position={[hit.x, 5, hit.y]}>
+    <group position={[hit.x, 5, -hit.y]}>
       <Html center distanceFactor={900} zIndexRange={[60, 0]}>
         <div
           style={{
@@ -280,6 +315,18 @@ export default function InteractiveEarth3D({
   const bounds = useMemo(() => worldBounds(countries), [countries]);
   const [elevHit, setElevHitLocal] = useState<ElevationHit | null>(null);
 
+  // Aspect-aware initial framing: fit the world WIDTH into the horizontal
+  // FOV with a 12% margin (the v39.1 canonical frame is 39,000 x 20,000 km
+  // - the fixed v39.0 offsets framed it at ~30% of the viewport).
+  const worldFitDistance = useCallback(
+    (aspect: number) => {
+      const vfov = (42 * Math.PI) / 180;
+      const hfov = 2 * Math.atan(Math.tan(vfov / 2) * Math.max(aspect, 0.6));
+      return (bounds.radius / Math.tan(hfov / 2)) * 1.12;
+    },
+    [bounds],
+  );
+
   const handleElevationHit = useCallback(
     (hit: ElevationHit | null) => {
       lastHitAt = Date.now();
@@ -293,7 +340,10 @@ export default function InteractiveEarth3D({
     (name: string | null) => {
       const dir = new THREE.Vector3(0, 0.95, 0.75).normalize();
       if (!name) {
-        const d = bounds.radius * 2.6;
+        const aspect = typeof window !== 'undefined'
+          ? window.innerWidth / Math.max(window.innerHeight, 1)
+          : 2.2;
+        const d = worldFitDistance(aspect);
         setFlight({
           goalPos: bounds.center.clone().add(dir.multiplyScalar(d)),
           goalTarget: bounds.center.clone(),
@@ -312,7 +362,7 @@ export default function InteractiveEarth3D({
         nonce: Date.now(),
       });
     },
-    [countries, bounds],
+    [countries, bounds, worldFitDistance],
   );
 
   useEffect(() => {
@@ -333,17 +383,28 @@ export default function InteractiveEarth3D({
     }));
   }, [countries, showLabels]);
 
+  // Initial fit distance from the CURRENT window aspect (the CameraRig
+  // refines it for the exact canvas size after mount).
+  const initialFit = (() => {
+    const aspect = typeof window !== 'undefined'
+      ? window.innerWidth / Math.max(window.innerHeight, 1)
+      : 2.0;
+    const vfov = (42 * Math.PI) / 180;
+    const hfov = 2 * Math.atan(Math.tan(vfov / 2) * Math.max(aspect, 0.6));
+    return (bounds.radius / Math.tan(hfov / 2)) * 1.12;
+  })();
+
   return (
     <Canvas
       dpr={[1, 1.75]}
       camera={{
         position: [
           bounds.center.x,
-          bounds.radius * 2.9,
-          bounds.center.z + bounds.radius * 2.3,
+          bounds.center.y + initialFit * 0.78,
+          bounds.center.z + initialFit * 0.63,
         ],
         near: 1,
-        far: bounds.radius * 25,
+        far: initialFit * 30,
         fov: 42,
       }}
       gl={{ antialias: true, powerPreference: 'high-performance' }}
@@ -445,6 +506,8 @@ export default function InteractiveEarth3D({
         active={!!flight}
         onDone={() => setFlight(null)}
       />
+
+      <CameraRig bounds={bounds} fitDistance={worldFitDistance} controlsRef={controlsRef} />
     </Canvas>
   );
 }
